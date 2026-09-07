@@ -37,7 +37,7 @@ When invoked directly as `scrim` (i.e., `argv[0]` is `scrim`), Scrim provides a 
 
 Example `scrim.yaml`:
 ```yaml
-telemetry: true
+telemetry: true # disabled (false) by default
 tools:
   node:
     system_path: /usr/local/bin/node

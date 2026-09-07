@@ -23,7 +23,7 @@
 Define a `scrim.yaml` at the root of your project:
 
 ```yaml
-telemetry: true
+telemetry: true # disabled (false) by default
 tools:
   node:
     system_path: /usr/local/bin/node

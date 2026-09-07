@@ -285,6 +285,71 @@ tools:
 }
 
 #[test]
+fn test_e2e_telemetry_disabled_by_default() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    // 1. Create a local mock tool
+    let local_tool = temp_path.join("my_local_tool");
+    fs::write(
+        &local_tool,
+        "#!/bin/sh\necho \"Telemetry test run (disabled by default)\"\n",
+    )
+    .unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&local_tool).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&local_tool, perms).unwrap();
+    }
+
+    // 2. Create scrim.yaml WITHOUT specifying telemetry (should default to false)
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    let config_content = format!(
+        r#"
+tools:
+  node:
+    system_path: "{}"
+"#,
+        local_tool.to_str().unwrap()
+    );
+    fs::write(&scrim_yaml, config_content).unwrap();
+
+    // Clear previous log if any
+    let log_path = Path::new("/tmp/scrim_telemetry.log");
+    if log_path.exists() {
+        let _ = fs::remove_file(log_path);
+    }
+
+    // 3. Create symlink node -> scrim
+    let shim_path = temp_path.join("node");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &shim_path).unwrap();
+
+    // 4. Run the shim
+    let output = Command::new(&shim_path)
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run local path shim");
+
+    assert!(output.status.success());
+
+    // 5. Verify telemetry did not write any log entries (since it defaults to false)
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    if log_path.exists() {
+        let content = fs::read_to_string(log_path).unwrap();
+        assert!(
+            !content.contains("\"tool\": \"node\""),
+            "Telemetry reported usage even though telemetry is not specified (should default to false)! Log content: {:?}",
+            content
+        );
+    }
+}
+
+#[test]
 fn test_e2e_http_download() {
     let scrim_bin = find_scrim_bin();
     let temp = tempdir().unwrap();

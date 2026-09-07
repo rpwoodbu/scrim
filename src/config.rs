@@ -25,7 +25,7 @@ pub struct Config {
 
 impl Config {
     pub fn telemetry_enabled(&self) -> bool {
-        self.telemetry.unwrap_or(true)
+        self.telemetry.unwrap_or(false)
     }
 
     pub fn merge(mut self, other: Config) -> Self {
@@ -199,5 +199,17 @@ tools:
         assert!(result.is_err(), "Expected parsing to fail due to unknown field 'acrhive_bin'");
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("unknown field `acrhive_bin`"), "Error should mention the unknown field");
+    }
+
+    #[test]
+    fn test_telemetry_disabled_by_default() {
+        let yaml = r#"
+tools:
+  node:
+    system_path: /usr/local/bin/node
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.telemetry, None);
+        assert_eq!(config.telemetry_enabled(), false);
     }
 }
