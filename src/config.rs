@@ -4,10 +4,10 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ToolConfig {
-    pub path: Option<String>,
+    pub system_path: Option<String>,
     pub url: Option<String>,
     pub sha256: Option<String>,
-    pub archive_bin: Option<String>,
+    pub archive_path: Option<String>,
     pub template: Option<String>,
 }
 
@@ -104,14 +104,14 @@ mod tests {
 telemetry: true
 tools:
   node:
-    path: /usr/local/bin/node
+    system_path: /usr/local/bin/node
   go:
     url: https://go.dev/dl/go1.21.5.linux-amd64.tar.gz
     sha256: 285c1f0624022839446d32
 "#;
         let config: Config = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.telemetry, true);
-        assert_eq!(config.tools.get("node").unwrap().path.as_ref().unwrap(), "/usr/local/bin/node");
+        assert_eq!(config.tools.get("node").unwrap().system_path.as_ref().unwrap(), "/usr/local/bin/node");
         assert_eq!(config.tools.get("go").unwrap().url.as_ref().unwrap(), "https://go.dev/dl/go1.21.5.linux-amd64.tar.gz");
     }
 }

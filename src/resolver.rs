@@ -4,21 +4,21 @@ use crate::config::Config;
 #[derive(Debug, PartialEq)]
 pub enum Resolution {
     LocalPath(PathBuf),
-    Fetch { url: String, sha256: String, archive_bin: Option<String> },
+    Fetch { url: String, sha256: String, archive_path: Option<String> },
 }
 
 pub fn resolve_tool(program_name: &str, config: Option<&Config>, path_env: &str, current_exe: &Path) -> Result<Option<Resolution>, String> {
     if let Some(config) = config {
         if let Some(tool_config) = config.tools.get(program_name) {
-            let has_path = tool_config.path.is_some();
+            let has_system_path = tool_config.system_path.is_some();
             let has_url = tool_config.url.is_some();
             let has_sha256 = tool_config.sha256.is_some();
             let has_template = tool_config.template.is_some();
-            let has_archive_bin = tool_config.archive_bin.is_some();
+            let has_archive_path = tool_config.archive_path.is_some();
 
-            // Rule 1: `path` is mutually exclusive with all fetch-related properties
-            if has_path && (has_url || has_sha256 || has_template || has_archive_bin) {
-                return Err(format!("Error: Tool '{}' specifies 'path' which is mutually exclusive with fetch-related properties.", program_name));
+            // Rule 1: `system_path` is mutually exclusive with all fetch-related properties
+            if has_system_path && (has_url || has_sha256 || has_template || has_archive_path) {
+                return Err(format!("Error: Tool '{}' specifies 'system_path' which is mutually exclusive with fetch-related properties.", program_name));
             }
 
             // Rule 2: `template` is mutually exclusive with `url` and `sha256`
@@ -35,12 +35,12 @@ pub fn resolve_tool(program_name: &str, config: Option<&Config>, path_env: &str,
                 ));
             }
 
-            // Rule 4: `archive_bin` requires `url` or `template`
-            if has_archive_bin && !has_url && !has_template {
-                return Err(format!("Error: Tool '{}' specifies 'archive_bin' but provides no 'url' or 'template'.", program_name));
+            // Rule 4: `archive_path` requires `url` or `template`
+            if has_archive_path && !has_url && !has_template {
+                return Err(format!("Error: Tool '{}' specifies 'archive_path' but provides no 'url' or 'template'.", program_name));
             }
 
-            if let Some(path) = &tool_config.path {
+            if let Some(path) = &tool_config.system_path {
                 return Ok(Some(Resolution::LocalPath(PathBuf::from(path))));
             }
 
@@ -64,7 +64,7 @@ pub fn resolve_tool(program_name: &str, config: Option<&Config>, path_env: &str,
                 return Ok(Some(Resolution::Fetch { 
                     url, 
                     sha256,
-                    archive_bin: tool_config.archive_bin.clone(),
+                    archive_path: tool_config.archive_path.clone(),
                 }));
             }
         }
@@ -114,10 +114,10 @@ mod tests {
     fn test_resolve_from_config_path() {
         let mut tools = HashMap::new();
         tools.insert("node".to_string(), ToolConfig {
-            path: Some("/usr/bin/node".to_string()),
+            system_path: Some("/usr/bin/node".to_string()),
             url: None,
             sha256: None,
-            archive_bin: None,
+            archive_path: None,
             template: None,
         });
         let config = Config { 
@@ -133,10 +133,10 @@ mod tests {
     fn test_resolve_fetch() {
         let mut tools = HashMap::new();
         tools.insert("go".to_string(), ToolConfig {
-            path: None,
+            system_path: None,
             url: Some("https://go.dev/dl/go.tar.gz".to_string()),
             sha256: Some("abc12345".to_string()),
-            archive_bin: None,
+            archive_path: None,
             template: None,
         });
         let config = Config { tools, telemetry: true };
@@ -145,7 +145,7 @@ mod tests {
         assert_eq!(resolved, Ok(Some(Resolution::Fetch { 
             url: "https://go.dev/dl/go.tar.gz".to_string(),
             sha256: "abc12345".to_string(),
-            archive_bin: None,
+            archive_path: None,
         })));
     }
 
@@ -153,17 +153,17 @@ mod tests {
     fn test_resolve_template() {
         let mut tools = HashMap::new();
         tools.insert("go".to_string(), ToolConfig {
-            path: None,
+            system_path: None,
             url: Some("https://go.dev/dl/go.tar.gz".to_string()),
             sha256: Some("abc12345".to_string()),
-            archive_bin: Some("go/bin/go".to_string()),
+            archive_path: Some("go/bin/go".to_string()),
             template: None,
         });
         tools.insert("gofmt".to_string(), ToolConfig {
-            path: None,
+            system_path: None,
             url: None,
             sha256: None,
-            archive_bin: Some("go/bin/gofmt".to_string()),
+            archive_path: Some("go/bin/gofmt".to_string()),
             template: Some("go".to_string()),
         });
         let config = Config { tools, telemetry: true };
@@ -172,7 +172,7 @@ mod tests {
         assert_eq!(resolved, Ok(Some(Resolution::Fetch { 
             url: "https://go.dev/dl/go.tar.gz".to_string(),
             sha256: "abc12345".to_string(),
-            archive_bin: Some("go/bin/gofmt".to_string()),
+            archive_path: Some("go/bin/gofmt".to_string()),
         })));
     }
 
@@ -180,24 +180,24 @@ mod tests {
     fn test_resolve_template_chain_disallowed() {
         let mut tools = HashMap::new();
         tools.insert("go".to_string(), ToolConfig {
-            path: None,
+            system_path: None,
             url: Some("https://go.dev/dl/go.tar.gz".to_string()),
             sha256: Some("abc12345".to_string()),
-            archive_bin: Some("go/bin/go".to_string()),
+            archive_path: Some("go/bin/go".to_string()),
             template: None,
         });
         tools.insert("gofmt".to_string(), ToolConfig {
-            path: None,
+            system_path: None,
             url: None,
             sha256: None,
-            archive_bin: Some("go/bin/gofmt".to_string()),
+            archive_path: Some("go/bin/gofmt".to_string()),
             template: Some("go".to_string()),
         });
         tools.insert("go-chained".to_string(), ToolConfig {
-            path: None,
+            system_path: None,
             url: None,
             sha256: None,
-            archive_bin: Some("go/bin/go-chained".to_string()),
+            archive_path: Some("go/bin/go-chained".to_string()),
             template: Some("gofmt".to_string()),
         });
         let config = Config { tools, telemetry: true };
@@ -211,34 +211,34 @@ mod tests {
         let mut tools = HashMap::new();
         // Path with fetch-related property
         tools.insert("err_path".to_string(), ToolConfig {
-            path: Some("/bin/node".to_string()),
+            system_path: Some("/bin/node".to_string()),
             url: Some("http://example.com/node.tar.gz".to_string()),
             sha256: None,
-            archive_bin: None,
+            archive_path: None,
             template: None,
         });
         // Template with url
         tools.insert("err_template".to_string(), ToolConfig {
-            path: None,
+            system_path: None,
             url: Some("http://example.com".to_string()),
             sha256: None,
-            archive_bin: None,
+            archive_path: None,
             template: Some("go".to_string()),
         });
         // Missing sha256
         tools.insert("err_sha".to_string(), ToolConfig {
-            path: None,
+            system_path: None,
             url: Some("http://example.com".to_string()),
             sha256: None,
-            archive_bin: None,
+            archive_path: None,
             template: None,
         });
-        // archive_bin without url or template
+        // archive_path without url or template
         tools.insert("err_archive".to_string(), ToolConfig {
-            path: None,
+            system_path: None,
             url: None,
             sha256: None,
-            archive_bin: Some("bin/foo".to_string()),
+            archive_path: Some("bin/foo".to_string()),
             template: None,
         });
 
@@ -246,7 +246,7 @@ mod tests {
 
         assert_eq!(
             resolve_tool("err_path", Some(&config), "", Path::new("/bin/scrim")),
-            Err("Error: Tool 'err_path' specifies 'path' which is mutually exclusive with fetch-related properties.".to_string())
+            Err("Error: Tool 'err_path' specifies 'system_path' which is mutually exclusive with fetch-related properties.".to_string())
         );
         assert_eq!(
             resolve_tool("err_template", Some(&config), "", Path::new("/bin/scrim")),
@@ -258,7 +258,7 @@ mod tests {
         );
         assert_eq!(
             resolve_tool("err_archive", Some(&config), "", Path::new("/bin/scrim")),
-            Err("Error: Tool 'err_archive' specifies 'archive_bin' but provides no 'url' or 'template'.".to_string())
+            Err("Error: Tool 'err_archive' specifies 'archive_path' but provides no 'url' or 'template'.".to_string())
         );
     }
 }

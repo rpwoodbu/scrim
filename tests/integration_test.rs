@@ -175,7 +175,7 @@ fn test_e2e_local_path_resolution() {
 telemetry: false
 tools:
   node:
-    path: "{}"
+    system_path: "{}"
 "#,
         local_tool.to_str().unwrap()
     );
@@ -227,7 +227,7 @@ fn test_e2e_telemetry_logging() {
 telemetry: true
 tools:
   node:
-    path: "{}"
+    system_path: "{}"
 "#,
         local_tool.to_str().unwrap()
     );

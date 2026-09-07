@@ -3,7 +3,7 @@ use std::process::Command;
 use std::fs;
 use std::io::Write;
 
-pub fn fetch_tool(tool_name: &str, url: &str, sha256: &str, archive_bin: Option<&str>) -> Result<PathBuf, Box<dyn std::error::Error>> {
+pub fn fetch_tool(tool_name: &str, url: &str, sha256: &str, archive_path: Option<&str>) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let home = std::env::var("HOME")?;
     let cache_dir = Path::new(&home).join(".cache/scrim/tools").join(sha256);
     
@@ -12,7 +12,7 @@ pub fn fetch_tool(tool_name: &str, url: &str, sha256: &str, archive_bin: Option<
     let is_archive = is_tar_gz || is_zip;
 
     let target_path = if is_archive {
-        if let Some(bin) = archive_bin {
+        if let Some(bin) = archive_path {
             cache_dir.join(bin)
         } else {
             cache_dir.join(tool_name)
