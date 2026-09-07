@@ -94,6 +94,10 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
     - Failed fetches and fallback behavior.
 - **Telemetry Validation**: Tests to ensure that telemetry failure never impacts the main execution flow.
 
+### 4. Bug Regression Testing
+- **Mandate**: All functionality must be covered by tests.
+- **Regression Prevention**: If a bug is discovered, a dedicated regression test must be written that clearly reproduces and elucidates the bug, ensuring it never returns.
+
 ## Future Work
 - **Unpacking Support**: Automatic extraction of `.tar.gz`, `.zip`, and other archive formats for fetched tools.
 - **Cache Management**: Commands to clean or inspect the `~/.cache/scrim` directory.

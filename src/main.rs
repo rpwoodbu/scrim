@@ -15,7 +15,7 @@ fn main() {
     }
 
     let current_exe = env::current_exe().expect("Failed to get current executable path");
-    let program_name = current_exe
+    let program_name = Path::new(&args[0])
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("scrim");
