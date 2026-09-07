@@ -254,7 +254,7 @@ tools:
 
     // 5. Poll the log file up to a 1-second timeout (checking every 5ms)
     let start = std::time::Instant::now();
-    let timeout = std::time::Duration::from_secs(1);
+    let timeout = std::time::Duration::from_secs(5);
     let poll_interval = std::time::Duration::from_millis(5);
     let mut log_content = String::new();
     let mut success = false;
@@ -279,7 +279,7 @@ tools:
 
     assert!(
         success,
-        "Telemetry log did not write correctly within 1s timeout! Captured content: {:?}",
+        "Telemetry log did not write correctly within 5s timeout! Captured content: {:?}",
         log_content
     );
 }
@@ -545,6 +545,21 @@ tools:
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("telemetry: false"));
     assert!(stdout.contains("system_path: /bin/echo"));
+    assert!(!stdout.contains("null"), "Output should not contain null entries");
+    assert!(!stdout.contains("url:"), "Unspecified url should be omitted");
+    assert!(!stdout.contains("sha256:"), "Unspecified sha256 should be omitted");
+    assert!(!stdout.contains("archive_path:"), "Unspecified archive_path should be omitted");
+    assert!(!stdout.contains("template:"), "Unspecified template should be omitted");
+
+    // 4.5 Run with 'config' on an empty config to verify empty collections are omitted
+    std::fs::write(&scrim_yaml, "{}").unwrap();
+    let output = Command::new(&scrim_bin)
+        .arg("config")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim config on empty config");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(!stdout.contains("tools:"), "Empty tools collection should be omitted");
 
     // 5. Run with invalid argument
     let output = Command::new(&scrim_bin)

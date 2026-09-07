@@ -31,7 +31,7 @@
 When invoked directly as `scrim` (i.e., `argv[0]` is `scrim`), Scrim provides a management CLI rather than proxying a tool. Running `scrim` without any arguments, or with invalid arguments, will display a short message guiding the user how to get help. The CLI supports the following commands:
 - `help`: Displays usage information and available commands.
 - `version`: Displays the version of Scrim.
-- `config`: Reports the resultant aggregated configuration after resolving all configuration layers.
+- `config`: Reports the resultant aggregated configuration after resolving all configuration layers. Unspecified fields and empty collections are omitted from the output to reduce noise.
 
 ### Configuration
 
