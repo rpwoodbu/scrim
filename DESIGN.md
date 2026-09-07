@@ -13,6 +13,7 @@
 - **Design-Driven Rigor**: All user-visible functionality and significant implementation details MUST be specified in this design document. Other implementation details MAY also be specified here.
 - **Test-Driven Rigor**: All functionality must be covered by tests. All bugs must be proven with a test included with the fix.
 - **Performance**: The critical path (resolving and executing a tool) must be as close to zero-overhead as possible.
+- **Backward Compatibility**: Once Scrim reaches GA (v1), configuration and behavior MUST be backward-compatible, as Scrim is bootstrapping other tools.
 - **Transparency**: Users should interact with their tools normally; Scrim stays behind the curtain.
 - **Actionable UX**: Scrim must never fail silently; errors and progress must be explicit and clear.
 - **Reliability**: Failures in telemetry or other auxiliary tasks must never block or prevent tool execution.
