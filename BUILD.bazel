@@ -1,0 +1,4 @@
+alias(
+    name = "scrim",
+    actual = "//src:scrim",
+)
