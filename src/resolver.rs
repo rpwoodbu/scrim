@@ -4,7 +4,7 @@ use crate::config::Config;
 #[derive(Debug, PartialEq)]
 pub enum Resolution {
     LocalPath(PathBuf),
-    Fetch { url: String, sha256: String },
+    Fetch { url: String, sha256: String, archive_bin: Option<String> },
 }
 
 pub fn resolve_tool(program_name: &str, config: Option<&Config>, path_env: &str, current_exe: &Path) -> Option<Resolution> {
@@ -16,7 +16,8 @@ pub fn resolve_tool(program_name: &str, config: Option<&Config>, path_env: &str,
             if let (Some(url), Some(sha256)) = (&tool_config.url, &tool_config.sha256) {
                 return Some(Resolution::Fetch { 
                     url: url.clone(), 
-                    sha256: sha256.clone() 
+                    sha256: sha256.clone(),
+                    archive_bin: tool_config.archive_bin.clone(),
                 });
             }
         }
@@ -69,6 +70,7 @@ mod tests {
             path: Some("/usr/bin/node".to_string()),
             url: None,
             sha256: None,
+            archive_bin: None,
         });
         let config = Config { 
             tools,
@@ -86,6 +88,7 @@ mod tests {
             path: None,
             url: Some("https://go.dev/dl/go.tar.gz".to_string()),
             sha256: Some("abc12345".to_string()),
+            archive_bin: None,
         });
         let config = Config { tools, telemetry: true };
 
@@ -93,6 +96,7 @@ mod tests {
         assert_eq!(resolved, Some(Resolution::Fetch { 
             url: "https://go.dev/dl/go.tar.gz".to_string(),
             sha256: "abc12345".to_string(),
+            archive_bin: None,
         }));
     }
 }

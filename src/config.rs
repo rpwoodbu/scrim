@@ -7,6 +7,7 @@ pub struct ToolConfig {
     pub path: Option<String>,
     pub url: Option<String>,
     pub sha256: Option<String>,
+    pub archive_bin: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

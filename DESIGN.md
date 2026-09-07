@@ -10,7 +10,8 @@
 
 ## Core Design Principles
 
-- **Performance First**: The critical path (resolving and executing a tool) must be as close to zero-overhead as possible.
+- **Test-Driven Rigor**: All functionality must be covered by tests.
+- **Performance**: The critical path (resolving and executing a tool) must be as close to zero-overhead as possible.
 - **Transparency**: Users should interact with their tools normally; Scrim stays behind the curtain.
 - **Reliability**: Failures in telemetry or other auxiliary tasks must never block or prevent tool execution.
 - **YAGNI (You Aren't Gonna Need It)**: Favor simplicity and minimal configuration. Avoid preemptive abstractions until they are strictly required.
@@ -44,6 +45,7 @@ When a command (e.g., `node`) is invoked, Scrim follows this resolution order:
       go:
         url: https://go.dev/dl/go1.21.5.linux-amd64.tar.gz
         sha256: 285c1f0624022839446d32
+        archive_bin: go/bin/go
     ```
 2.  **User/System Default**: If no repository override is found, Scrim falls back to a user-level configuration (e.g., `~/.config/scrim/scrim.yaml`) or a system-level configuration (e.g., `/etc/scrim/scrim.yaml`).
 3.  **Path Resolution**:
@@ -104,11 +106,9 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
 - **Performance Threshold Validation**: There must be a separate "manual" test target which will run the benchmarks such that they generate proper data and will automatically fail if the required performance thresholds (e.g., < 2ms overhead) are not met.
 
 ### 4. Bug Regression Testing
-- **Mandate**: All functionality must be covered by tests.
 - **Regression Prevention**: If a bug is discovered, a dedicated regression test must be written that clearly reproduces and elucidates the bug, ensuring it never returns.
 
 ## Future Work
-- **Unpacking Support**: Automatic extraction of `.tar.gz`, `.zip`, and other archive formats for fetched tools.
 - **Cache Management**: Commands to clean or inspect the `~/.cache/scrim` directory.
 - **Global Config Fallbacks**: Implement support for user-level (`~/.config/scrim/scrim.yaml`) and system-level (`/etc/scrim/scrim.yaml`) default configurations when no repository `scrim.yaml` is found.
 - **Cache Override Support**: Support environment variable overrides (e.g., `SCRIM_CACHE_DIR`) to configure the cache directory dynamically.

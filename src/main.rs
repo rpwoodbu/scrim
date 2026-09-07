@@ -52,8 +52,8 @@ fn proxy_command(program_name: &str, args: &[String], current_exe: &Path) {
     if let Some(res) = resolution {
         let target_path = match res {
             resolver::Resolution::LocalPath(p) => p,
-            resolver::Resolution::Fetch { url, sha256 } => {
-                match fetcher::fetch_tool(program_name, &url, &sha256) {
+            resolver::Resolution::Fetch { url, sha256, archive_bin } => {
+                match fetcher::fetch_tool(program_name, &url, &sha256, archive_bin.as_deref()) {
                     Ok(p) => p,
                     Err(e) => {
                         eprintln!("Error: Failed to fetch tool '{}': {}", program_name, e);
