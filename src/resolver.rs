@@ -10,6 +10,36 @@ pub enum Resolution {
 pub fn resolve_tool(program_name: &str, config: Option<&Config>, path_env: &str, current_exe: &Path) -> Result<Option<Resolution>, String> {
     if let Some(config) = config {
         if let Some(tool_config) = config.tools.get(program_name) {
+            let has_path = tool_config.path.is_some();
+            let has_url = tool_config.url.is_some();
+            let has_sha256 = tool_config.sha256.is_some();
+            let has_template = tool_config.template.is_some();
+            let has_archive_bin = tool_config.archive_bin.is_some();
+
+            // Rule 1: `path` is mutually exclusive with all fetch-related properties
+            if has_path && (has_url || has_sha256 || has_template || has_archive_bin) {
+                return Err(format!("Error: Tool '{}' specifies 'path' which is mutually exclusive with fetch-related properties.", program_name));
+            }
+
+            // Rule 2: `template` is mutually exclusive with `url` and `sha256`
+            if has_template && (has_url || has_sha256) {
+                return Err(format!("Error: Tool '{}' specifies 'template' which is mutually exclusive with 'url' and 'sha256'.", program_name));
+            }
+
+            // Rule 3: `url` and `sha256` must both be present or both absent
+            if has_url != has_sha256 {
+                return Err(format!("Error: Tool '{}' specifies '{}' without '{}'. Both must be provided together.", 
+                    program_name, 
+                    if has_url { "url" } else { "sha256" },
+                    if has_url { "sha256" } else { "url" }
+                ));
+            }
+
+            // Rule 4: `archive_bin` requires `url` or `template`
+            if has_archive_bin && !has_url && !has_template {
+                return Err(format!("Error: Tool '{}' specifies 'archive_bin' but provides no 'url' or 'template'.", program_name));
+            }
+
             if let Some(path) = &tool_config.path {
                 return Ok(Some(Resolution::LocalPath(PathBuf::from(path))));
             }
@@ -174,5 +204,61 @@ mod tests {
 
         let resolved = resolve_tool("go-chained", Some(&config), "", Path::new("/bin/scrim"));
         assert_eq!(resolved, Err("Error: Tool 'go-chained' references template 'gofmt', which is also a template. Template chaining is not allowed.".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_validation_errors() {
+        let mut tools = HashMap::new();
+        // Path with fetch-related property
+        tools.insert("err_path".to_string(), ToolConfig {
+            path: Some("/bin/node".to_string()),
+            url: Some("http://example.com/node.tar.gz".to_string()),
+            sha256: None,
+            archive_bin: None,
+            template: None,
+        });
+        // Template with url
+        tools.insert("err_template".to_string(), ToolConfig {
+            path: None,
+            url: Some("http://example.com".to_string()),
+            sha256: None,
+            archive_bin: None,
+            template: Some("go".to_string()),
+        });
+        // Missing sha256
+        tools.insert("err_sha".to_string(), ToolConfig {
+            path: None,
+            url: Some("http://example.com".to_string()),
+            sha256: None,
+            archive_bin: None,
+            template: None,
+        });
+        // archive_bin without url or template
+        tools.insert("err_archive".to_string(), ToolConfig {
+            path: None,
+            url: None,
+            sha256: None,
+            archive_bin: Some("bin/foo".to_string()),
+            template: None,
+        });
+
+        let config = Config { tools, telemetry: true };
+
+        assert_eq!(
+            resolve_tool("err_path", Some(&config), "", Path::new("/bin/scrim")),
+            Err("Error: Tool 'err_path' specifies 'path' which is mutually exclusive with fetch-related properties.".to_string())
+        );
+        assert_eq!(
+            resolve_tool("err_template", Some(&config), "", Path::new("/bin/scrim")),
+            Err("Error: Tool 'err_template' specifies 'template' which is mutually exclusive with 'url' and 'sha256'.".to_string())
+        );
+        assert_eq!(
+            resolve_tool("err_sha", Some(&config), "", Path::new("/bin/scrim")),
+            Err("Error: Tool 'err_sha' specifies 'url' without 'sha256'. Both must be provided together.".to_string())
+        );
+        assert_eq!(
+            resolve_tool("err_archive", Some(&config), "", Path::new("/bin/scrim")),
+            Err("Error: Tool 'err_archive' specifies 'archive_bin' but provides no 'url' or 'template'.".to_string())
+        );
     }
 }
