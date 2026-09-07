@@ -13,6 +13,7 @@
 - **Performance First**: The critical path (resolving and executing a tool) must be as close to zero-overhead as possible.
 - **Transparency**: Users should interact with their tools normally; Scrim stays behind the curtain.
 - **Reliability**: Failures in telemetry or other auxiliary tasks must never block or prevent tool execution.
+- **YAGNI (You Aren't Gonna Need It)**: Favor simplicity and minimal configuration. Avoid preemptive abstractions until they are strictly required.
 
 ## Technical Stack
 
