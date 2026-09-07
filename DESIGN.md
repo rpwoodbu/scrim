@@ -128,3 +128,4 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
 - **Global Config Fallbacks**: Implement support for user-level (`~/.config/scrim/scrim.yaml`) and system-level (`/etc/scrim/scrim.yaml`) default configurations when no repository `scrim.yaml` is found.
 - **Cache Override Support**: Support environment variable overrides (e.g., `SCRIM_CACHE_DIR`) to configure the cache directory dynamically.
 - **Home Directory Search Boundary**: Stop upward directory traversal for `scrim.yaml` at `$HOME` to prevent scanning system directories when outside of a repository.
+- **Concurrency Safety**: Safely support simultaneous concurrent access, notably when fetching the tool.
