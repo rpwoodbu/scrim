@@ -46,7 +46,7 @@ Telemetry is gathered to track tool usage patterns.
 
 ---
 
-## Open Design Questions
-- **Shim Strategy**: Should we use a single binary that detects its name from `argv[0]`, or should we generate tiny, tool-specific shims that call into a central `scrim` daemon? (Current plan: `argv[0]` detection).
-- **Configuration Format**: Should we support existing files like `.nvmrc` or `go.mod` natively, or require a specific `scrim` config file?
-- **Fetching Mechanism**: Should Scrim handle the actual downloads (e.g., using `reqwest`), or delegate to system tools like `curl`/`wget` to keep the binary small?
+## Open Design Decisions (Resolved)
+- **Shim Strategy**: Single binary with `argv[0]` detection. Symlinks will point to the `scrim` binary.
+- **Configuration Format**: Scrim-specific configuration only (e.g., `.scrim.json`). We will prioritize simplicity and speed over native support for other tools' config files.
+- **Fetching Mechanism**: Use external binaries (like `curl`) for downloads to keep the Scrim binary size to a minimum.
