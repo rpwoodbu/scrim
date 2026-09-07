@@ -9,9 +9,7 @@ use tempfile::tempdir;
 
 fn find_scrim_bin() -> PathBuf {
     if let Ok(runfiles_dir) = env::var("RUNFILES_DIR") {
-        let path = Path::new(&runfiles_dir).join("scrim").join("scrim");
-        if path.exists() { return path; }
-        let path = Path::new(&runfiles_dir).join("__main__").join("scrim");
+        let path = Path::new(&runfiles_dir).join("_main").join("src").join("scrim");
         if path.exists() { return path; }
     }
     if let Ok(current_exe) = env::current_exe() {
@@ -20,7 +18,7 @@ fn find_scrim_bin() -> PathBuf {
             if path.exists() { return path; }
         }
     }
-    let path = PathBuf::from("bazel-bin/scrim");
+    let path = PathBuf::from("bazel-bin/src/scrim");
     if path.exists() { return path; }
     panic!("Could not locate 'scrim' binary for benchmark");
 }

@@ -1,0 +1,14 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+
+rust_binary(
+    name = "scrim_bench",
+    srcs = ["bench.rs"],
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    data = ["//src:scrim"],
+    deps = [
+        "//src:scrim_lib",
+        "@crates//:criterion",
+        "@crates//:tempfile",
+    ],
+)

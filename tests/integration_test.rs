@@ -5,13 +5,8 @@ use std::process::Command;
 use tempfile::tempdir;
 
 fn find_scrim_bin() -> PathBuf {
-    // 1. Try RUNFILES_DIR environment variable (Bazel standard)
     if let Ok(runfiles_dir) = env::var("RUNFILES_DIR") {
-        let path = Path::new(&runfiles_dir).join("scrim").join("scrim");
-        if path.exists() {
-            return path;
-        }
-        let path = Path::new(&runfiles_dir).join("__main__").join("scrim");
+        let path = Path::new(&runfiles_dir).join("_main").join("src").join("scrim");
         if path.exists() {
             return path;
         }
@@ -26,7 +21,7 @@ fn find_scrim_bin() -> PathBuf {
         }
     }
     // 3. Fallback to standard bazel-bin
-    let path = PathBuf::from("bazel-bin/scrim");
+    let path = PathBuf::from("bazel-bin/src/scrim");
     if path.exists() {
         return path;
     }

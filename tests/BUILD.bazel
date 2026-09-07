@@ -1,0 +1,18 @@
+load("@rules_rust//rust:defs.bzl", "rust_test")
+
+rust_test(
+    name = "scrim_integration_test",
+    srcs = ["integration_test.rs"],
+    edition = "2021",
+    data = ["//src:scrim"],
+    deps = ["@crates//:tempfile"],
+)
+
+rust_test(
+    name = "performance_validation_test",
+    srcs = ["perf_test.rs"],
+    edition = "2021",
+    data = ["//benches:scrim_bench"],
+    tags = ["manual"],
+    deps = ["@crates//:tempfile"],
+)

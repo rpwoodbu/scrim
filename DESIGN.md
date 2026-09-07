@@ -68,7 +68,14 @@ Telemetry is gathered to track tool usage patterns.
 
 ## Build & Project Structure
 - Use Bazel with `rules_rust` for building the project.
-- The project will be structured to ensure the "hot path" (proxying) is as efficient as possible.
+- **Modular Build Files**: To maintain a clean architecture, avoid a single overarching `BUILD.bazel` file at the repository root. Prefer individual `BUILD.bazel` files distributed within each logical segment of the project.
+
+### Directory Layout
+The project enforces the following prescriptive layout:
+- `/src/`: Contains the core Rust source code and library logic.
+- `/tests/`: Contains standard unit and integration tests as well as validation tests for benchmarks thresholds.
+    - Benchmark threshold tests must be marked as `manual` as they are not correctness tests and are subject to flakiness.
+- `/benches/`: Contains the statistical microbenchmark harness code.
 
 ---
 

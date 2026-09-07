@@ -1,0 +1,31 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+rust_library(
+    name = "scrim_lib",
+    srcs = glob(["**/*.rs"], exclude=["main.rs"]),
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@crates//:serde",
+        "@crates//:serde_yaml",
+        "@crates//:libc",
+        "@crates//:chrono",
+    ],
+)
+
+rust_binary(
+    name = "scrim",
+    srcs = ["main.rs"],
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":scrim_lib",
+        "@crates//:libc",
+    ],
+)
+
+rust_test(
+    name = "scrim_test",
+    crate = ":scrim_lib",
+    deps = ["@crates//:tempfile"],
+)

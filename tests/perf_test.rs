@@ -6,9 +6,7 @@ use tempfile::tempdir;
 
 fn find_scrim_bench_bin() -> PathBuf {
     if let Ok(runfiles_dir) = env::var("RUNFILES_DIR") {
-        let path = Path::new(&runfiles_dir).join("scrim").join("scrim_bench");
-        if path.exists() { return path; }
-        let path = Path::new(&runfiles_dir).join("__main__").join("scrim_bench");
+        let path = Path::new(&runfiles_dir).join("_main").join("benches").join("scrim_bench");
         if path.exists() { return path; }
     }
     if let Ok(current_exe) = env::current_exe() {
@@ -17,7 +15,7 @@ fn find_scrim_bench_bin() -> PathBuf {
             if path.exists() { return path; }
         }
     }
-    let path = PathBuf::from("bazel-bin/scrim_bench");
+    let path = PathBuf::from("bazel-bin/benches/scrim_bench");
     if path.exists() { return path; }
     panic!("Could not locate 'scrim_bench' binary for validation");
 }
