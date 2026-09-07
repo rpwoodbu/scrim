@@ -116,7 +116,7 @@ tools:
 
     // 5. Verify the tool was cached
     let expected_cache_path = cache_home
-        .join(".cache/scrim/tools/demotool")
+        .join(".cache/scrim/tools")
         .join(&sha256)
         .join("demotool");
     assert!(expected_cache_path.exists(), "Cache path not populated!");
@@ -374,7 +374,7 @@ tools:
 
     // 6. Verify cache population
     let expected_cache_path = cache_home
-        .join(".cache/scrim/tools/demotool")
+        .join(".cache/scrim/tools")
         .join(&sha256)
         .join("demotool");
     assert!(expected_cache_path.exists(), "HTTP cached path not populated!");

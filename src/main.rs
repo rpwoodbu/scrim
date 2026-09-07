@@ -49,50 +49,57 @@ fn proxy_command(program_name: &str, args: &[String], current_exe: &Path) {
     
     let resolution = resolver::resolve_tool(program_name, config.as_ref(), &path_env, current_exe);
 
-    if let Some(res) = resolution {
-        let target_path = match res {
-            resolver::Resolution::LocalPath(p) => p,
-            resolver::Resolution::Fetch { url, sha256, archive_bin } => {
-                match fetcher::fetch_tool(program_name, &url, &sha256, archive_bin.as_deref()) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        eprintln!("Error: Failed to fetch tool '{}': {}", program_name, e);
-                        std::process::exit(1);
+    match resolution {
+        Ok(Some(res)) => {
+            let target_path = match res {
+                resolver::Resolution::LocalPath(p) => p,
+                resolver::Resolution::Fetch { url, sha256, archive_bin } => {
+                    match fetcher::fetch_tool(program_name, &url, &sha256, archive_bin.as_deref()) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            eprintln!("Error: Failed to fetch tool '{}': {}", program_name, e);
+                            std::process::exit(1);
+                        }
                     }
                 }
+            };
+
+            // Prepare the command
+            let mut cmd = Command::new(&target_path);
+            
+            // Pass through all arguments (excluding the shim itself)
+            if args.len() > 1 {
+                cmd.args(&args[1..]);
             }
-        };
 
-        // Prepare the command
-        let mut cmd = Command::new(&target_path);
-        
-        // Pass through all arguments (excluding the shim itself)
-        if args.len() > 1 {
-            cmd.args(&args[1..]);
-        }
-
-        // Fork for telemetry (non-blocking) if enabled in config
-        let enable_telemetry = config.as_ref().map(|c| c.telemetry).unwrap_or(true);
-        if enable_telemetry {
-            unsafe {
-                let pid = libc::fork();
-                if pid == 0 {
-                    // Child process: handle telemetry and exit
-                    telemetry::report_usage(program_name, &target_path);
-                    libc::_exit(0);
+            // Fork for telemetry (non-blocking) if enabled in config
+            let enable_telemetry = config.as_ref().map(|c| c.telemetry).unwrap_or(true);
+            if enable_telemetry {
+                unsafe {
+                    let pid = libc::fork();
+                    if pid == 0 {
+                        // Child process: handle telemetry and exit
+                        telemetry::report_usage(program_name, &target_path);
+                        libc::_exit(0);
+                    }
+                    // Parent process continues to exec
                 }
-                // Parent process continues to exec
             }
-        }
 
-        // Replace the current process with the target tool
-        let err = cmd.exec();
-        
-        // If exec returns, it failed
-        eprintln!("Failed to execute tool: {}", err);
-        std::process::exit(1);
-    } else {
-        eprintln!("Error: Tool '{}' not found in config or PATH", program_name);
-        std::process::exit(1);
+            // Replace the current process with the target tool
+            let err = cmd.exec();
+            
+            // If exec returns, it failed
+            eprintln!("Failed to execute tool: {}", err);
+            std::process::exit(1);
+        }
+        Ok(None) => {
+            eprintln!("Error: Tool '{}' not found in config or PATH", program_name);
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        }
     }
 }

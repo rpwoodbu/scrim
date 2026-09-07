@@ -7,24 +7,41 @@ pub enum Resolution {
     Fetch { url: String, sha256: String, archive_bin: Option<String> },
 }
 
-pub fn resolve_tool(program_name: &str, config: Option<&Config>, path_env: &str, current_exe: &Path) -> Option<Resolution> {
+pub fn resolve_tool(program_name: &str, config: Option<&Config>, path_env: &str, current_exe: &Path) -> Result<Option<Resolution>, String> {
     if let Some(config) = config {
         if let Some(tool_config) = config.tools.get(program_name) {
             if let Some(path) = &tool_config.path {
-                return Some(Resolution::LocalPath(PathBuf::from(path)));
+                return Ok(Some(Resolution::LocalPath(PathBuf::from(path))));
             }
-            if let (Some(url), Some(sha256)) = (&tool_config.url, &tool_config.sha256) {
-                return Some(Resolution::Fetch { 
-                    url: url.clone(), 
-                    sha256: sha256.clone(),
+
+            let mut resolved_url = tool_config.url.clone();
+            let mut resolved_sha256 = tool_config.sha256.clone();
+
+            if let Some(template_name) = &tool_config.template {
+                if let Some(template_config) = config.tools.get(template_name) {
+                    if template_config.template.is_none() {
+                        resolved_url = template_config.url.clone();
+                        resolved_sha256 = template_config.sha256.clone();
+                    } else {
+                        return Err(format!("Error: Tool '{}' references template '{}', which is also a template. Template chaining is not allowed.", program_name, template_name));
+                    }
+                } else {
+                    return Err(format!("Error: Tool '{}' references template '{}', which was not found.", program_name, template_name));
+                }
+            }
+
+            if let (Some(url), Some(sha256)) = (resolved_url, resolved_sha256) {
+                return Ok(Some(Resolution::Fetch { 
+                    url, 
+                    sha256,
                     archive_bin: tool_config.archive_bin.clone(),
-                });
+                }));
             }
         }
     }
 
     // Fallback: Search PATH
-    find_in_path(program_name, path_env, current_exe).map(Resolution::LocalPath)
+    Ok(find_in_path(program_name, path_env, current_exe).map(Resolution::LocalPath))
 }
 
 fn find_in_path(program_name: &str, path_env: &str, current_exe: &Path) -> Option<PathBuf> {
@@ -71,6 +88,7 @@ mod tests {
             url: None,
             sha256: None,
             archive_bin: None,
+            template: None,
         });
         let config = Config { 
             tools,
@@ -78,7 +96,7 @@ mod tests {
         };
 
         let resolved = resolve_tool("node", Some(&config), "", Path::new("/bin/scrim"));
-        assert_eq!(resolved, Some(Resolution::LocalPath(PathBuf::from("/usr/bin/node"))));
+        assert_eq!(resolved, Ok(Some(Resolution::LocalPath(PathBuf::from("/usr/bin/node")))));
     }
 
     #[test]
@@ -89,14 +107,72 @@ mod tests {
             url: Some("https://go.dev/dl/go.tar.gz".to_string()),
             sha256: Some("abc12345".to_string()),
             archive_bin: None,
+            template: None,
         });
         let config = Config { tools, telemetry: true };
 
         let resolved = resolve_tool("go", Some(&config), "", Path::new("/bin/scrim"));
-        assert_eq!(resolved, Some(Resolution::Fetch { 
+        assert_eq!(resolved, Ok(Some(Resolution::Fetch { 
             url: "https://go.dev/dl/go.tar.gz".to_string(),
             sha256: "abc12345".to_string(),
             archive_bin: None,
-        }));
+        })));
+    }
+
+    #[test]
+    fn test_resolve_template() {
+        let mut tools = HashMap::new();
+        tools.insert("go".to_string(), ToolConfig {
+            path: None,
+            url: Some("https://go.dev/dl/go.tar.gz".to_string()),
+            sha256: Some("abc12345".to_string()),
+            archive_bin: Some("go/bin/go".to_string()),
+            template: None,
+        });
+        tools.insert("gofmt".to_string(), ToolConfig {
+            path: None,
+            url: None,
+            sha256: None,
+            archive_bin: Some("go/bin/gofmt".to_string()),
+            template: Some("go".to_string()),
+        });
+        let config = Config { tools, telemetry: true };
+
+        let resolved = resolve_tool("gofmt", Some(&config), "", Path::new("/bin/scrim"));
+        assert_eq!(resolved, Ok(Some(Resolution::Fetch { 
+            url: "https://go.dev/dl/go.tar.gz".to_string(),
+            sha256: "abc12345".to_string(),
+            archive_bin: Some("go/bin/gofmt".to_string()),
+        })));
+    }
+
+    #[test]
+    fn test_resolve_template_chain_disallowed() {
+        let mut tools = HashMap::new();
+        tools.insert("go".to_string(), ToolConfig {
+            path: None,
+            url: Some("https://go.dev/dl/go.tar.gz".to_string()),
+            sha256: Some("abc12345".to_string()),
+            archive_bin: Some("go/bin/go".to_string()),
+            template: None,
+        });
+        tools.insert("gofmt".to_string(), ToolConfig {
+            path: None,
+            url: None,
+            sha256: None,
+            archive_bin: Some("go/bin/gofmt".to_string()),
+            template: Some("go".to_string()),
+        });
+        tools.insert("go-chained".to_string(), ToolConfig {
+            path: None,
+            url: None,
+            sha256: None,
+            archive_bin: Some("go/bin/go-chained".to_string()),
+            template: Some("gofmt".to_string()),
+        });
+        let config = Config { tools, telemetry: true };
+
+        let resolved = resolve_tool("go-chained", Some(&config), "", Path::new("/bin/scrim"));
+        assert_eq!(resolved, Err("Error: Tool 'go-chained' references template 'gofmt', which is also a template. Template chaining is not allowed.".to_string()));
     }
 }

@@ -13,6 +13,7 @@
 - **Test-Driven Rigor**: All functionality must be covered by tests.
 - **Performance**: The critical path (resolving and executing a tool) must be as close to zero-overhead as possible.
 - **Transparency**: Users should interact with their tools normally; Scrim stays behind the curtain.
+- **Actionable UX**: Errors must be explicit, actionable, and clear. Scrim should never fail silently or present opaque errors for misconfigurations.
 - **Reliability**: Failures in telemetry or other auxiliary tasks must never block or prevent tool execution.
 - **YAGNI (You Aren't Gonna Need It)**: Favor simplicity and minimal configuration. Avoid preemptive abstractions until they are strictly required.
 
@@ -46,11 +47,16 @@ When a command (e.g., `node`) is invoked, Scrim follows this resolution order:
         url: https://go.dev/dl/go1.21.5.linux-amd64.tar.gz
         sha256: 285c1f0624022839446d32
         archive_bin: go/bin/go
+      gofmt:
+        template: go
+        archive_bin: go/bin/gofmt
     ```
+    - **Tool Templates**: A tool can specify a `template: <tool_name>` property to inherit the `url` and `sha256` of another tool configuration, minimizing repetition and preventing mismatches within toolchains. Template chains are not allowed; a templated entry must directly reference a concrete tool configuration.
 2.  **User/System Default**: If no repository override is found, Scrim falls back to a user-level configuration (e.g., `~/.config/scrim/scrim.yaml`) or a system-level configuration (e.g., `/etc/scrim/scrim.yaml`).
 3.  **Path Resolution**:
     - If the resolved version is a **Path**, execute it directly.
-    - If the resolved version needs to be **Fetched**, check `~/.cache/scrim/` (or an overridden cache path). If missing, fetch it synchronously (with a progress indicator) and then execute.
+    - If the resolved version needs to be **Fetched**, check `~/.cache/scrim/tools/<sha256>/`. Caching purely by the `sha256` digest (omitting the tool name) maximizes cache hits when multiple repositories or templated aliases refer to the same payload.
+    - If missing, fetch it synchronously, verify the digest, extract the archive (if applicable), and then execute.
 
 ### 3. Upward Search Heuristics
 To minimize filesystem overhead during resolution:

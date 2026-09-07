@@ -5,7 +5,7 @@ use std::io::Write;
 
 pub fn fetch_tool(tool_name: &str, url: &str, sha256: &str, archive_bin: Option<&str>) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let home = std::env::var("HOME")?;
-    let cache_dir = Path::new(&home).join(".cache/scrim/tools").join(tool_name).join(sha256);
+    let cache_dir = Path::new(&home).join(".cache/scrim/tools").join(sha256);
     
     let is_tar_gz = url.ends_with(".tar.gz") || url.ends_with(".tgz");
     let is_zip = url.ends_with(".zip");
@@ -28,7 +28,7 @@ pub fn fetch_tool(tool_name: &str, url: &str, sha256: &str, archive_bin: Option<
     fs::create_dir_all(&cache_dir)?;
 
     let download_path = if is_archive {
-        cache_dir.join(format!("{}.archive", tool_name))
+        cache_dir.join("download.archive")
     } else {
         cache_dir.join(tool_name)
     };
@@ -148,7 +148,8 @@ mod tests {
         assert!(result.is_ok());
         let target_path = result.unwrap();
         assert!(target_path.exists());
-        assert!(target_path.to_str().unwrap().contains("fake_home/.cache/scrim/tools/my_test_tool"));
+        assert!(target_path.to_str().unwrap().contains("fake_home/.cache/scrim/tools/"));
+        assert!(target_path.to_str().unwrap().ends_with("my_test_tool"));
 
         // Verify it was marked executable
         #[cfg(unix)]
@@ -236,7 +237,7 @@ mod tests {
         assert!(result.is_ok());
         let target_path = result.unwrap();
         assert!(target_path.exists());
-        assert!(target_path.to_str().unwrap().contains("fake_home/.cache/scrim/tools/my_test_tool"));
+        assert!(target_path.to_str().unwrap().contains("fake_home/.cache/scrim/tools/"));
         assert!(target_path.to_str().unwrap().ends_with("bin/mytool"));
 
         #[cfg(unix)]
