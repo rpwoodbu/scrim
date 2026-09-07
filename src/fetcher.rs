@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::fs;
-use std::io::Write;
 
 pub fn fetch_tool(tool_name: &str, url: &str, sha256: &str, archive_path: Option<&str>) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let home = std::env::var("HOME")?;
@@ -35,6 +34,7 @@ pub fn fetch_tool(tool_name: &str, url: &str, sha256: &str, archive_path: Option
 
     // Download with curl
     let status = Command::new("curl")
+        .arg("-f")
         .arg("-L")
         .arg("-o")
         .arg(&download_path)
@@ -46,19 +46,22 @@ pub fn fetch_tool(tool_name: &str, url: &str, sha256: &str, archive_path: Option
     }
 
     // Verify SHA256 using sha256sum
-    let mut child = Command::new("sha256sum")
-        .arg("-c")
-        .stdin(std::process::Stdio::piped())
-        .spawn()?;
+    let sha256_output = Command::new("sha256sum")
+        .arg(&download_path)
+        .output()?;
 
-    if let Some(mut stdin) = child.stdin.take() {
-        writeln!(stdin, "{}  {}", sha256, download_path.display())?;
+    if !sha256_output.status.success() {
+        let _ = fs::remove_file(&download_path);
+        return Err("Failed to compute SHA256".into());
     }
 
-    let status = child.wait()?;
-    if !status.success() {
+    let sha256_str = String::from_utf8_lossy(&sha256_output.stdout);
+    let computed_sha256 = sha256_str.split_whitespace().next().unwrap_or("");
+
+    if computed_sha256 != sha256 {
+        let err_msg = format!("SHA256 verification failed for {}.\nExpected: {}\nActual:   {}", tool_name, sha256, computed_sha256);
         let _ = fs::remove_file(&download_path);
-        return Err("SHA256 verification failed".into());
+        return Err(err_msg.into());
     }
 
     if is_archive {
@@ -169,6 +172,14 @@ mod tests {
         let mock_src = temp_path.join("mock_src");
         fs::write(&mock_src, "echo 'hello'").unwrap();
 
+        // Compute actual sha256 to verify error message contents
+        let sha256_output = Command::new("sha256sum")
+            .arg(&mock_src)
+            .output()
+            .unwrap();
+        let sha256_str = String::from_utf8(sha256_output.stdout).unwrap();
+        let actual_sha256 = sha256_str.split_whitespace().next().unwrap().to_string();
+
         let fake_home = temp_path.join("fake_home");
         fs::create_dir_all(&fake_home).unwrap();
 
@@ -187,7 +198,33 @@ mod tests {
         // Assertions: should fail with SHA verification error
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
-        assert!(err_msg.contains("verification failed"));
+        assert!(err_msg.contains("SHA256 verification failed for my_test_tool."));
+        assert!(err_msg.contains("Expected: incorrect_sha_hash"));
+        assert!(err_msg.contains(&format!("Actual:   {}", actual_sha256)));
+    }
+
+    #[test]
+    fn test_fetch_tool_download_failure() {
+        let temp = tempdir().unwrap();
+        let fake_home = temp.path().join("fake_home");
+        fs::create_dir_all(&fake_home).unwrap();
+
+        let original_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &fake_home);
+
+        // A non-existent file path will cause `curl -f` to fail
+        let file_url = "file:///tmp/this_file_does_not_exist_scrim_test_12345";
+        let result = fetch_tool("my_test_tool", file_url, "any_sha256", None);
+
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+
+        assert!(result.is_err());
+        let err_msg = result.err().unwrap().to_string();
+        assert_eq!(err_msg, "Failed to download tool");
     }
 
     #[test]
