@@ -185,3 +185,89 @@ tools:
     assert!(output.status.success());
     assert!(stdout.contains("Local tool run with: app.js"));
 }
+
+#[test]
+fn test_e2e_telemetry_logging() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    // 1. Create a local mock tool
+    let local_tool = temp_path.join("my_local_tool");
+    fs::write(
+        &local_tool,
+        "#!/bin/sh\necho \"Telemetry test run\"\n",
+    )
+    .unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&local_tool).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&local_tool, perms).unwrap();
+    }
+
+    // 2. Create scrim.yaml with telemetry enabled
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    let config_content = format!(
+        r#"
+telemetry: true
+tools:
+  node:
+    path: "{}"
+"#,
+        local_tool.to_str().unwrap()
+    );
+    fs::write(&scrim_yaml, config_content).unwrap();
+
+    // Clear previous log if any
+    let log_path = Path::new("/tmp/scrim_telemetry.log");
+    if log_path.exists() {
+        let _ = fs::remove_file(log_path);
+    }
+
+    // 3. Create symlink node -> scrim
+    let shim_path = temp_path.join("node");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &shim_path).unwrap();
+
+    // 4. Run the shim
+    let output = Command::new(&shim_path)
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run local path shim");
+
+    assert!(output.status.success());
+
+    // 5. Poll the log file up to a 1-second timeout (checking every 5ms)
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(1);
+    let poll_interval = std::time::Duration::from_millis(5);
+    let mut log_content = String::new();
+    let mut success = false;
+
+    while start.elapsed() < timeout {
+        if log_path.exists() {
+            if let Ok(content) = fs::read_to_string(log_path) {
+                if content.contains("\"tool\": \"node\"") {
+                    log_content = content;
+                    success = true;
+                    break;
+                }
+            }
+        }
+        std::thread::sleep(poll_interval);
+    }
+
+    // Clean up before asserting (so we don't leave artifacts if assertion fails)
+    if log_path.exists() {
+        let _ = fs::remove_file(log_path);
+    }
+
+    assert!(
+        success,
+        "Telemetry log did not write correctly within 1s timeout! Captured content: {:?}",
+        log_content
+    );
+}
