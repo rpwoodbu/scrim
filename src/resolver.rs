@@ -18,17 +18,17 @@ pub fn resolve_tool(program_name: &str, config: Option<&Config>, path_env: &str,
 
             // Rule 1: `system_path` is mutually exclusive with all fetch-related properties
             if has_system_path && (has_url || has_sha256 || has_template || has_archive_path) {
-                return Err(format!("Error: Tool '{}' specifies 'system_path' which is mutually exclusive with fetch-related properties.", program_name));
+                return Err(format!("Tool '{}' specifies 'system_path' which is mutually exclusive with fetch-related properties.", program_name));
             }
 
             // Rule 2: `template` is mutually exclusive with `url` and `sha256`
             if has_template && (has_url || has_sha256) {
-                return Err(format!("Error: Tool '{}' specifies 'template' which is mutually exclusive with 'url' and 'sha256'.", program_name));
+                return Err(format!("Tool '{}' specifies 'template' which is mutually exclusive with 'url' and 'sha256'.", program_name));
             }
 
             // Rule 3: `url` and `sha256` must both be present or both absent
             if has_url != has_sha256 {
-                return Err(format!("Error: Tool '{}' specifies '{}' without '{}'. Both must be provided together.", 
+                return Err(format!("Tool '{}' specifies '{}' without '{}'. Both must be provided together.", 
                     program_name, 
                     if has_url { "url" } else { "sha256" },
                     if has_url { "sha256" } else { "url" }
@@ -37,7 +37,7 @@ pub fn resolve_tool(program_name: &str, config: Option<&Config>, path_env: &str,
 
             // Rule 4: `archive_path` requires `url` or `template`
             if has_archive_path && !has_url && !has_template {
-                return Err(format!("Error: Tool '{}' specifies 'archive_path' but provides no 'url' or 'template'.", program_name));
+                return Err(format!("Tool '{}' specifies 'archive_path' but provides no 'url' or 'template'.", program_name));
             }
 
             if let Some(path) = &tool_config.system_path {
@@ -53,10 +53,10 @@ pub fn resolve_tool(program_name: &str, config: Option<&Config>, path_env: &str,
                         resolved_url = template_config.url.clone();
                         resolved_sha256 = template_config.sha256.clone();
                     } else {
-                        return Err(format!("Error: Tool '{}' references template '{}', which is also a template. Template chaining is not allowed.", program_name, template_name));
+                        return Err(format!("Tool '{}' references template '{}', which is also a template. Template chaining is not allowed.", program_name, template_name));
                     }
                 } else {
-                    return Err(format!("Error: Tool '{}' references template '{}', which was not found.", program_name, template_name));
+                    return Err(format!("Tool '{}' references template '{}', which was not found.", program_name, template_name));
                 }
             }
 
@@ -67,7 +67,7 @@ pub fn resolve_tool(program_name: &str, config: Option<&Config>, path_env: &str,
                     archive_path: tool_config.archive_path.clone(),
                 }));
             } else if has_archive_path {
-                return Err(format!("Error: Tool '{}' specifies 'archive_path' but the referenced template does not provide a fetchable archive.", program_name));
+                return Err(format!("Tool '{}' specifies 'archive_path' but the referenced template does not provide a fetchable archive.", program_name));
             }
         }
     }
@@ -205,7 +205,7 @@ mod tests {
         let config = Config { tools, telemetry: true };
 
         let resolved = resolve_tool("go-chained", Some(&config), "", Path::new("/bin/scrim"));
-        assert_eq!(resolved, Err("Error: Tool 'go-chained' references template 'gofmt', which is also a template. Template chaining is not allowed.".to_string()));
+        assert_eq!(resolved, Err("Tool 'go-chained' references template 'gofmt', which is also a template. Template chaining is not allowed.".to_string()));
     }
 
     #[test]
@@ -263,23 +263,23 @@ mod tests {
 
         assert_eq!(
             resolve_tool("err_path", Some(&config), "", Path::new("/bin/scrim")),
-            Err("Error: Tool 'err_path' specifies 'system_path' which is mutually exclusive with fetch-related properties.".to_string())
+            Err("Tool 'err_path' specifies 'system_path' which is mutually exclusive with fetch-related properties.".to_string())
         );
         assert_eq!(
             resolve_tool("err_template", Some(&config), "", Path::new("/bin/scrim")),
-            Err("Error: Tool 'err_template' specifies 'template' which is mutually exclusive with 'url' and 'sha256'.".to_string())
+            Err("Tool 'err_template' specifies 'template' which is mutually exclusive with 'url' and 'sha256'.".to_string())
         );
         assert_eq!(
             resolve_tool("err_sha", Some(&config), "", Path::new("/bin/scrim")),
-            Err("Error: Tool 'err_sha' specifies 'url' without 'sha256'. Both must be provided together.".to_string())
+            Err("Tool 'err_sha' specifies 'url' without 'sha256'. Both must be provided together.".to_string())
         );
         assert_eq!(
             resolve_tool("err_archive", Some(&config), "", Path::new("/bin/scrim")),
-            Err("Error: Tool 'err_archive' specifies 'archive_path' but provides no 'url' or 'template'.".to_string())
+            Err("Tool 'err_archive' specifies 'archive_path' but provides no 'url' or 'template'.".to_string())
         );
         assert_eq!(
             resolve_tool("err_archive_template", Some(&config), "", Path::new("/bin/scrim")),
-            Err("Error: Tool 'err_archive_template' specifies 'archive_path' but the referenced template does not provide a fetchable archive.".to_string())
+            Err("Tool 'err_archive_template' specifies 'archive_path' but the referenced template does not provide a fetchable archive.".to_string())
         );
     }
 }

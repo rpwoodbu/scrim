@@ -452,8 +452,46 @@ tools:
     
     // 6. Verify UX requirement: Output unpacking progress
     assert!(
-        stderr.contains("Unpacking demotool archive..."),
-        "Stderr did not contain the unpacking UX message. Stderr: {:?}",
+        stderr.contains("[Scrim] Unpacking demotool archive..."),
+        "Stderr did not contain the attributed unpacking UX message. Stderr: {:?}",
+        stderr
+    );
+}
+
+#[test]
+fn test_e2e_error_attribution() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    // 1. Create an invalid scrim.yaml
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    let config_content = r#"
+tools:
+  badtool:
+    system_path: /bin/ls
+    url: https://example.com/ls
+"#;
+    fs::write(&scrim_yaml, config_content).unwrap();
+
+    // 2. Create symlink badtool -> scrim
+    let shim_path = temp_path.join("badtool");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &shim_path).unwrap();
+
+    // 3. Run the shim and capture output
+    let output = Command::new(&shim_path)
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run shim");
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+
+    // 4. Verify UX requirement: Error is explicit and attributed
+    assert!(!output.status.success());
+    assert!(
+        stderr.starts_with("[Scrim] Error:"),
+        "Stderr did not start with the attributed [Scrim] Error prefix. Stderr: {:?}",
         stderr
     );
 }

@@ -59,7 +59,7 @@ fn proxy_command(program_name: &str, args: &[std::ffi::OsString], current_exe: &
                     match fetcher::fetch_tool(program_name, &url, &sha256, archive_path.as_deref()) {
                         Ok(p) => p,
                         Err(e) => {
-                            eprintln!("Error: Failed to fetch tool '{}': {}", program_name, e);
+                            scrim_lib::scrim_error!("Failed to fetch tool '{}': {}", program_name, e);
                             std::process::exit(1);
                         }
                     }
@@ -92,15 +92,15 @@ fn proxy_command(program_name: &str, args: &[std::ffi::OsString], current_exe: &
             let err = cmd.exec();
             
             // If exec returns, it failed
-            eprintln!("Failed to execute tool: {}", err);
+            scrim_lib::scrim_error!("Failed to execute tool: {}", err);
             std::process::exit(1);
         }
         Ok(None) => {
-            eprintln!("Error: Tool '{}' not found in config or PATH", program_name);
+            scrim_lib::scrim_error!("Tool '{}' not found in config or PATH", program_name);
             std::process::exit(1);
         }
         Err(e) => {
-            eprintln!("{}", e);
+            scrim_lib::scrim_error!("{}", e);
             std::process::exit(1);
         }
     }

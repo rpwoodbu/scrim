@@ -13,9 +13,16 @@
 - **Test-Driven Rigor**: All functionality must be covered by tests. All bugs must be proven with a test included with the fix.
 - **Performance**: The critical path (resolving and executing a tool) must be as close to zero-overhead as possible.
 - **Transparency**: Users should interact with their tools normally; Scrim stays behind the curtain.
-- **Actionable UX**: Errors must be explicit, actionable, and clear. Scrim should never fail silently or present opaque errors for misconfigurations. Additionally, Scrim must proactively inform the user during long-running operations (e.g., outputting that an archive is being unpacked).
+- **Actionable UX**: Scrim must never fail silently; errors and progress must be explicit and clear.
 - **Reliability**: Failures in telemetry or other auxiliary tasks must never block or prevent tool execution.
 - **YAGNI (You Aren't Gonna Need It)**: Favor simplicity and minimal configuration. Avoid preemptive abstractions until they are strictly required.
+- **DRY (Don't Repeat Yourself)**: Avoid duplicating logic or configuration; centralize shared behavior.
+
+## UX
+
+- **Actionable**: Errors must be explicit and clear. Scrim must never fail silently.
+- **Attribution**: All error output must clearly indicate that it originates from Scrim.
+- **Visibility**: Proactively inform the user during long-running operations (e.g., unpacking archives).
 
 ## Technical Stack
 
@@ -53,7 +60,7 @@ When a command (e.g., `node`) is invoked, Scrim follows this resolution order:
     ```
     - **Tool Templates**: A tool can specify a `template: <tool_name>` property to inherit the `url` and `sha256` of another tool configuration, minimizing repetition and preventing mismatches within toolchains. Template chains are not allowed; a templated entry must directly reference a concrete tool configuration.
     
-    - **Configuration Validation**: To enforce the **Actionable UX** principle, Scrim will explicitly reject invalid configurations with clear error messages rather than silently ignoring properties. Specifically:
+    - **Configuration Validation**: To enforce the actionable UX principles, Scrim will explicitly reject invalid configurations with clear error messages rather than silently ignoring properties. Specifically:
         1. YAML parsing must be strict: unknown or misspelled fields must be rejected with an error rather than silently ignored.
         2. `system_path` is mutually exclusive with all fetch-related properties (`url`, `sha256`, `template`, `archive_path`).
         3. `template` is mutually exclusive with `url` and `sha256`.
@@ -83,6 +90,9 @@ Telemetry is gathered to track tool usage patterns.
     - The **Parent** process will immediately `execve()` the target tool to preserve the original PID and environment.
     - The **Child** process will handle telemetry gathering and reporting in the background, then exit silently.
     - This ensures telemetry is completely decoupled from the tool's execution latency.
+
+### 6. Logging & User Communication
+Scrim avoids heavy external logging crates. Instead, it uses a lightweight, internal logging module (e.g., `src/logger.rs`) with custom macros (e.g., `scrim_error!`, `scrim_progress!`) to ensure consistent attribution.
 
 ## Build & Project Structure
 - Use Bazel with `rules_rust` for building the project.
