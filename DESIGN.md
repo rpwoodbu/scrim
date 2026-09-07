@@ -26,16 +26,22 @@ Scrim works by acting as a shim for various developer tools.
 ### 2. Resolution Logic
 When a command (e.g., `node`) is invoked, Scrim follows this resolution order:
 
-1.  **Repository Override**: Search upwards from the current working directory (CWD) for a configuration file (e.g., `.scrim.yaml` or `.tool-versions`).
+1.  **Repository Override**: Search upwards from the current working directory (CWD) for a configuration file (e.g., `.scrim.json`). 
+    - **Note**: For the initial implementation, we will prioritize an **easy-to-use and intuitive configuration format** to establish the user experience, then optimize for speed.
 2.  **User/System Default**: If no repository override is found, use a pre-configured global default.
 3.  **Path Resolution**:
     - If the resolved version is a **Path**, execute it directly.
     - If the resolved version needs to be **Fetched**, check `~/.cache/scrim/` (or an overridden cache path). If missing, fetch it synchronously (with a progress indicator) and then execute.
 
-### 3. Execution
+### 3. Upward Search Heuristics
+To minimize filesystem overhead during resolution:
+- Scrim will search upwards from the CWD for a configuration file.
+- **Future Optimization**: To prevent unnecessary `stat` calls in large directory trees, Scrim can stop the search at known boundaries (e.g., the user's home directory or the first `.git` directory encountered).
+
+### 4. Execution
 To minimize overhead, Scrim will use `execve` (on Unix) to replace the current process with the target tool process. This ensures there is no "parent" Scrim process hanging around during tool execution.
 
-### 4. Telemetry Hook
+### 5. Telemetry Hook
 Telemetry is gathered to track tool usage patterns.
 - **Constraint**: Must never block or cause the tool to fail.
 - **Implementation**: 
