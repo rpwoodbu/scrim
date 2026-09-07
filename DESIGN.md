@@ -83,7 +83,7 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
 - We will use `criterion` or a similar Rust benchmarking suite to measure:
     - Config resolution time (searching parent directories).
     - Parsing time for the configuration file.
-    - Forking and `execve` overhead.
+    - End-to-End (E2E) hot path shim overhead (exercising the full proxy flow).
 - Benchmarks will be integrated into the Bazel build pipeline.
 
 ### 3. Testing Strategy
@@ -93,6 +93,7 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
     - Missing configurations (falling back to global defaults).
     - Failed fetches and fallback behavior.
 - **Telemetry Validation**: Tests to ensure that telemetry failure never impacts the main execution flow.
+- **Performance Threshold Validation**: There must be a separate "manual" test target which will run the benchmarks such that they generate proper data and will automatically fail if the required performance thresholds (e.g., < 2ms overhead) are not met.
 
 ### 4. Bug Regression Testing
 - **Mandate**: All functionality must be covered by tests.
@@ -104,4 +105,3 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
 - **Global Config Fallbacks**: Implement support for user-level (`~/.config/scrim/scrim.yaml`) and system-level (`/etc/scrim/scrim.yaml`) default configurations when no repository `scrim.yaml` is found.
 - **Cache Override Support**: Support environment variable overrides (e.g., `SCRIM_CACHE_DIR`) to configure the cache directory dynamically.
 - **Home Directory Search Boundary**: Stop upward directory traversal for `scrim.yaml` at `$HOME` to prevent scanning system directories when outside of a repository.
-- **Microbenchmarks**: Implement performance microbenchmarks (measuring config resolution, config parsing, fork overhead, and E2E hot path shim overhead) integrated into the Bazel build pipeline.

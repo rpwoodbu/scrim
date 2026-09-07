@@ -1,17 +1,25 @@
 load("@crates//:defs.bzl", "all_crate_deps")
-load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
-rust_binary(
-    name = "scrim",
-    srcs = glob(["src/**/*.rs"]),
+rust_library(
+    name = "scrim_lib",
+    srcs = glob(["src/**/*.rs"], exclude=["src/main.rs"]),
     edition = "2021",
     visibility = ["//visibility:public"],
     deps = all_crate_deps(),
 )
 
+rust_binary(
+    name = "scrim",
+    srcs = ["src/main.rs"],
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [":scrim_lib"] + all_crate_deps(),
+)
+
 rust_test(
     name = "scrim_test",
-    crate = ":scrim",
+    crate = ":scrim_lib",
     deps = all_crate_deps(),
 )
 
@@ -20,5 +28,26 @@ rust_test(
     srcs = ["tests/integration_test.rs"],
     edition = "2021",
     data = [":scrim"],
+    deps = all_crate_deps(),
+)
+
+rust_binary(
+    name = "scrim_bench",
+    srcs = ["benches/bench.rs"],
+    edition = "2021",
+    data = [":scrim"],
+    deps = [
+        ":scrim_lib",
+        "@crates//:criterion",
+        "@crates//:tempfile",
+    ] + all_crate_deps(),
+)
+
+rust_test(
+    name = "performance_validation_test",
+    srcs = ["tests/perf_test.rs"],
+    edition = "2021",
+    data = [":scrim_bench"],
+    tags = ["manual"],
     deps = all_crate_deps(),
 )

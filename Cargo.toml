@@ -11,3 +11,8 @@ chrono = "0.4"
 
 [dev-dependencies]
 tempfile = "3.8"
+criterion = "0.5"
+
+[[bench]]
+name = "bench"
+harness = false

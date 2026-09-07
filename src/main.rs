@@ -1,7 +1,4 @@
-mod config;
-mod resolver;
-mod telemetry;
-mod fetcher;
+use scrim_lib::{config, fetcher, resolver, telemetry};
 
 use std::env;
 use std::os::unix::process::CommandExt;
