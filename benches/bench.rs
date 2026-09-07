@@ -41,7 +41,7 @@ fn bench_config_parsing(c: &mut Criterion) {
 telemetry: true
 tools:
   node:
-    path: /usr/local/bin/node
+    system_path: /usr/local/bin/node
   go:
     url: https://go.dev/dl/go1.21.5.linux-amd64.tar.gz
     sha256: 285c1f0624022839446d32
@@ -60,7 +60,7 @@ fn bench_resolver(c: &mut Criterion) {
 telemetry: true
 tools:
   node:
-    path: /usr/local/bin/node
+    system_path: /usr/local/bin/node
 "#;
     let dir = tempdir().unwrap();
     let config_path = dir.path().join("scrim.yaml");
@@ -87,7 +87,7 @@ fn bench_e2e_shim(c: &mut Criterion) {
 telemetry: false
 tools:
   true:
-    path: /bin/true
+    system_path: /bin/true
 "#;
     fs::write(&scrim_yaml, config_content).unwrap();
 
