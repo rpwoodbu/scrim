@@ -68,7 +68,16 @@ bazel build //...
 ```
 
 ### Running Tests
-The test suite includes cargo unit tests and E2E integration tests simulating network downloads and telemetry forks:
+The test suite includes Rust unit tests and E2E integration tests simulating network downloads and telemetry forks:
 ```bash
 bazel test //...
 ```
+
+### IDE Support (rust-analyzer)
+Because this project strictly uses Bazel as its build system, `rust-analyzer` needs a `rust-project.json` file to understand the project structure and dependencies.
+
+You can generate this file by running:
+```bash
+bazel run @rules_rust//tools/rust_analyzer:gen_rust_project
+```
+This will place a `rust-project.json` at the root of the repository, enabling features like autocomplete, type hints, and go-to-definition in editors like VSCode or Neovim. You may need to restart your IDE's language server after generating it.
