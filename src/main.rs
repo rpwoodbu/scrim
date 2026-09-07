@@ -6,7 +6,7 @@ use std::process::Command;
 use std::path::Path;
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
+    let args: Vec<std::ffi::OsString> = env::args_os().collect();
     if args.is_empty() {
         return;
     }
@@ -15,29 +15,31 @@ fn main() {
     let program_name = Path::new(&args[0])
         .file_name()
         .and_then(|s| s.to_str())
-        .unwrap_or("scrim");
+        .unwrap_or("scrim")
+        .to_string();
 
     if program_name == "scrim" {
         handle_management_command(&args);
     } else {
-        proxy_command(program_name, &args, &current_exe);
+        proxy_command(&program_name, &args, &current_exe);
     }
 }
 
-fn handle_management_command(args: &[String]) {
+fn handle_management_command(args: &[std::ffi::OsString]) {
     if args.len() < 2 {
         println!("Scrim: The transparent tool proxy.");
         println!("Usage: scrim <command> [args]");
         return;
     }
 
-    match args[1].as_str() {
-        "version" => println!("scrim 0.1.0"),
-        _ => println!("Unknown command: {}", args[1]),
+    match args[1].to_str() {
+        Some("version") => println!("scrim 0.1.0"),
+        Some(cmd) => println!("Unknown command: {}", cmd),
+        None => println!("Unknown command"),
     }
 }
 
-fn proxy_command(program_name: &str, args: &[String], current_exe: &Path) {
+fn proxy_command(program_name: &str, args: &[std::ffi::OsString], current_exe: &Path) {
     let cwd = env::current_dir().expect("Failed to get current directory");
     let config_path = config::find_config(&cwd);
     
