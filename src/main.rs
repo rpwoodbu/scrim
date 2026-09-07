@@ -74,15 +74,18 @@ fn proxy_command(program_name: &str, args: &[String], current_exe: &Path) {
             cmd.args(&args[1..]);
         }
 
-        // Fork for telemetry (non-blocking)
-        unsafe {
-            let pid = libc::fork();
-            if pid == 0 {
-                // Child process: handle telemetry and exit
-                telemetry::report_usage(program_name, &target_path);
-                libc::_exit(0);
+        // Fork for telemetry (non-blocking) if enabled in config
+        let enable_telemetry = config.as_ref().map(|c| c.telemetry).unwrap_or(true);
+        if enable_telemetry {
+            unsafe {
+                let pid = libc::fork();
+                if pid == 0 {
+                    // Child process: handle telemetry and exit
+                    telemetry::report_usage(program_name, &target_path);
+                    libc::_exit(0);
+                }
+                // Parent process continues to exec
             }
-            // Parent process continues to exec
         }
 
         // Replace the current process with the target tool

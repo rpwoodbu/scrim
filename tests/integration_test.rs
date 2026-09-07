@@ -91,6 +91,12 @@ tools:
     let cache_home = temp_path.join("fake_home");
     fs::create_dir_all(&cache_home).unwrap();
 
+    // Clear previous log if any
+    let log_path = Path::new("/tmp/scrim_telemetry.log");
+    if log_path.exists() {
+        let _ = fs::remove_file(log_path);
+    }
+
     // 4. Execute the symlink shim
     let output = Command::new(&shim_path)
         .arg("hello")
@@ -132,6 +138,17 @@ tools:
     let stdout_cached = String::from_utf8(output_cached.stdout).unwrap();
     assert!(output_cached.status.success());
     assert!(stdout_cached.contains("Mock Tool Executed: args=second run"));
+
+    // Verify telemetry did not write any log entries (since telemetry: false is set)
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    if log_path.exists() {
+        let content = fs::read_to_string(log_path).unwrap();
+        assert!(
+            !content.contains("\"tool\": \"demotool\""),
+            "Telemetry reported usage even though telemetry: false was set! Log content: {:?}",
+            content
+        );
+    }
 }
 
 #[test]
