@@ -66,6 +66,8 @@ pub fn resolve_tool(program_name: &str, config: Option<&Config>, path_env: &str,
                     sha256,
                     archive_path: tool_config.archive_path.clone(),
                 }));
+            } else if has_archive_path {
+                return Err(format!("Error: Tool '{}' specifies 'archive_path' but the referenced template does not provide a fetchable archive.", program_name));
             }
         }
     }
@@ -241,6 +243,21 @@ mod tests {
             archive_path: Some("bin/foo".to_string()),
             template: None,
         });
+        // archive_path with template that doesn't have url
+        tools.insert("err_archive_template".to_string(), ToolConfig {
+            system_path: None,
+            url: None,
+            sha256: None,
+            archive_path: Some("bin/foo".to_string()),
+            template: Some("local_tool".to_string()),
+        });
+        tools.insert("local_tool".to_string(), ToolConfig {
+            system_path: Some("/bin/local".to_string()),
+            url: None,
+            sha256: None,
+            archive_path: None,
+            template: None,
+        });
 
         let config = Config { tools, telemetry: true };
 
@@ -259,6 +276,10 @@ mod tests {
         assert_eq!(
             resolve_tool("err_archive", Some(&config), "", Path::new("/bin/scrim")),
             Err("Error: Tool 'err_archive' specifies 'archive_path' but provides no 'url' or 'template'.".to_string())
+        );
+        assert_eq!(
+            resolve_tool("err_archive_template", Some(&config), "", Path::new("/bin/scrim")),
+            Err("Error: Tool 'err_archive_template' specifies 'archive_path' but the referenced template does not provide a fetchable archive.".to_string())
         );
     }
 }
