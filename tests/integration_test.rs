@@ -495,3 +495,63 @@ tools:
         stderr
     );
 }
+
+#[test]
+fn test_e2e_management_cli() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    // 1. Run without arguments
+    let output = Command::new(&scrim_bin)
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim without args");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Run 'scrim help' for usage."));
+
+    // 2. Run with 'help'
+    let output = Command::new(&scrim_bin)
+        .arg("help")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim help");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Scrim: The transparent tool proxy."));
+    assert!(stdout.contains("Commands:"));
+
+    // 3. Run with 'version'
+    let output = Command::new(&scrim_bin)
+        .arg("version")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim version");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("scrim 0.1.0"));
+
+    // 4. Run with 'config'
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    let config_content = r#"telemetry: false
+tools:
+  demotool:
+    system_path: /bin/echo"#;
+    std::fs::write(&scrim_yaml, config_content).unwrap();
+
+    let output = Command::new(&scrim_bin)
+        .arg("config")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim config");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("telemetry: false"));
+    assert!(stdout.contains("system_path: /bin/echo"));
+
+    // 5. Run with invalid argument
+    let output = Command::new(&scrim_bin)
+        .arg("unknown_command")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim unknown");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Run 'scrim help' for usage."));
+}

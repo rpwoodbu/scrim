@@ -26,16 +26,34 @@ fn main() {
 }
 
 fn handle_management_command(args: &[std::ffi::OsString]) {
-    if args.len() < 2 {
-        println!("Scrim: The transparent tool proxy.");
-        println!("Usage: scrim <command> [args]");
-        return;
-    }
-
-    match args[1].to_str() {
+    match args.get(1).and_then(|s| s.to_str()) {
+        Some("help") => {
+            println!("Scrim: The transparent tool proxy.");
+            println!("Usage: scrim <command> [args]");
+            println!("\nCommands:");
+            println!("  help     Displays usage information and available commands.");
+            println!("  version  Displays the version of Scrim.");
+            println!("  config   Reports the resultant aggregated configuration after resolving all configuration layers.");
+        }
         Some("version") => println!("scrim 0.1.0"),
-        Some(cmd) => println!("Unknown command: {}", cmd),
-        None => println!("Unknown command"),
+        Some("config") => {
+            let cwd = env::current_dir().expect("Failed to get current directory");
+            let config = match config::load_config(&cwd) {
+                Ok(c) => c,
+                Err(e) => {
+                    scrim_lib::scrim_error!("Failed to load configuration: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            match serde_yaml::to_string(&config) {
+                Ok(yaml) => print!("{}", yaml),
+                Err(e) => {
+                    scrim_lib::scrim_error!("Failed to serialize configuration: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        _ => println!("Run 'scrim help' for usage."),
     }
 }
 

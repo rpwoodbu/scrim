@@ -21,6 +21,7 @@ rust_binary(
     deps = [
         ":scrim_lib",
         "@crates//:libc",
+        "@crates//:serde_yaml",
     ],
 )
 

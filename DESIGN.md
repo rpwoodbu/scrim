@@ -26,6 +26,13 @@
 - **Attribution**: All error output must clearly indicate that it originates from Scrim.
 - **Visibility**: Proactively inform the user during long-running operations (e.g., unpacking archives).
 
+### Management CLI
+
+When invoked directly as `scrim` (i.e., `argv[0]` is `scrim`), Scrim provides a management CLI rather than proxying a tool. Running `scrim` without any arguments, or with invalid arguments, will display a short message guiding the user how to get help. The CLI supports the following commands:
+- `help`: Displays usage information and available commands.
+- `version`: Displays the version of Scrim.
+- `config`: Reports the resultant aggregated configuration after resolving all configuration layers.
+
 ### Configuration
 
 Example `scrim.yaml`:
@@ -56,7 +63,8 @@ Scrim works by acting as a drop-in shim for developer tools. Unlike tools that r
 - Users create symlinks or hardlinks (for slightly better performance) named as the commands they wish to wrap (e.g., `node`, `go`) in a directory already in their `PATH` (e.g., `/usr/local/bin` or `~/.local/bin`).
 - These links all point to the single `scrim` binary.
 - `scrim` uses the `argv[0]` (the command name) to determine which tool it is proxying.
-- **Exception**: If `argv[0]` is `scrim` itself, it presents a management CLI (e.g., for `scrim version`).
+- **Exception**: If `argv[0]` is `scrim` itself, it presents a management CLI.
+
 
 ### Resolution Logic
 When a command (e.g., `node`) is invoked, Scrim follows this resolution logic:
