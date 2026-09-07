@@ -68,11 +68,11 @@ When a command (e.g., `node`) is invoked, Scrim follows this resolution order:
         3. `template` is mutually exclusive with `url` and `sha256`.
         4. If a tool requires fetching, both `url` and `sha256` must be present (neither can be provided without the other).
         5. `archive_path` cannot be provided if the tool doesn't resolve to a fetchable archive (i.e., no `url` or `template` is provided).
-        6. Empty tool configurations are valid (e.g., used only to enable telemetry for a tool found in `PATH`).
+        6. Empty tool configurations are invalid. Every tool must specify a `system_path`, a `url` (with `sha256`), or a `template`.
 
 2.  **User/System Default**: If no repository override is found, Scrim falls back to a user-level configuration (e.g., `~/.config/scrim/scrim.yaml`) or a system-level configuration (e.g., `/etc/scrim/scrim.yaml`).
-3.  **Path Resolution**:
-    - If the resolved version is a **Path**, execute it directly.
+3.  **Execution**:
+    - If the resolved version is a **Local Path** (via `system_path`), execute it directly.
     - If the resolved version needs to be **Fetched**, check `~/.cache/scrim/tools/<sha256>/`. Caching purely by the `sha256` digest (omitting the tool name) maximizes cache hits when multiple repositories or templated aliases refer to the same payload.
     - If missing, fetch it synchronously, verify the digest, extract the archive (if applicable), and then execute.
 

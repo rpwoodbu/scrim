@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use crate::config::Config;
 
 #[derive(Debug, PartialEq)]
@@ -7,7 +7,7 @@ pub enum Resolution {
     Fetch { url: String, sha256: String, archive_path: Option<String> },
 }
 
-pub fn resolve_tool(program_name: &str, config: Option<&Config>, path_env: &str, current_exe: &Path) -> Result<Option<Resolution>, String> {
+pub fn resolve_tool(program_name: &str, config: Option<&Config>) -> Result<Option<Resolution>, String> {
     if let Some(config) = config {
         if let Some(tool_config) = config.tools.get(program_name) {
             let has_system_path = tool_config.system_path.is_some();
@@ -38,6 +38,11 @@ pub fn resolve_tool(program_name: &str, config: Option<&Config>, path_env: &str,
             // Rule 4: `archive_path` requires `url` or `template`
             if has_archive_path && !has_url && !has_template {
                 return Err(format!("Tool '{}' specifies 'archive_path' but provides no 'url' or 'template'.", program_name));
+            }
+
+            // Rule 5: Empty tool configurations are invalid
+            if !has_system_path && !has_url && !has_template {
+                return Err(format!("Tool '{}' has an empty configuration. Every tool must specify a 'system_path', 'url', or 'template'.", program_name));
             }
 
             if let Some(path) = &tool_config.system_path {
@@ -72,38 +77,7 @@ pub fn resolve_tool(program_name: &str, config: Option<&Config>, path_env: &str,
         }
     }
 
-    // Fallback: Search PATH
-    Ok(find_in_path(program_name, path_env, current_exe).map(Resolution::LocalPath))
-}
-
-fn find_in_path(program_name: &str, path_env: &str, current_exe: &Path) -> Option<PathBuf> {
-    for dir in path_env.split(':') {
-        if dir.is_empty() { continue; }
-        let path = Path::new(dir).join(program_name);
-        if path.is_file() {
-            // Check if this is the same file as the current executable (via device/inode)
-            if is_same_file(&path, current_exe) {
-                continue;
-            }
-            return Some(path);
-        }
-    }
-    None
-}
-
-fn is_same_file(path1: &Path, path2: &Path) -> bool {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if let (Ok(m1), Ok(m2)) = (path1.metadata(), path2.metadata()) {
-            return m1.dev() == m2.dev() && m1.ino() == m2.ino();
-        }
-    }
-    // Fallback to canonical path comparison
-    if let (Ok(p1), Ok(p2)) = (path1.canonicalize(), path2.canonicalize()) {
-        return p1 == p2;
-    }
-    false
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -127,7 +101,7 @@ mod tests {
             telemetry: true,
         };
 
-        let resolved = resolve_tool("node", Some(&config), "", Path::new("/bin/scrim"));
+        let resolved = resolve_tool("node", Some(&config));
         assert_eq!(resolved, Ok(Some(Resolution::LocalPath(PathBuf::from("/usr/bin/node")))));
     }
 
@@ -143,7 +117,7 @@ mod tests {
         });
         let config = Config { tools, telemetry: true };
 
-        let resolved = resolve_tool("go", Some(&config), "", Path::new("/bin/scrim"));
+        let resolved = resolve_tool("go", Some(&config));
         assert_eq!(resolved, Ok(Some(Resolution::Fetch { 
             url: "https://go.dev/dl/go.tar.gz".to_string(),
             sha256: "abc12345".to_string(),
@@ -170,7 +144,7 @@ mod tests {
         });
         let config = Config { tools, telemetry: true };
 
-        let resolved = resolve_tool("gofmt", Some(&config), "", Path::new("/bin/scrim"));
+        let resolved = resolve_tool("gofmt", Some(&config));
         assert_eq!(resolved, Ok(Some(Resolution::Fetch { 
             url: "https://go.dev/dl/go.tar.gz".to_string(),
             sha256: "abc12345".to_string(),
@@ -204,7 +178,7 @@ mod tests {
         });
         let config = Config { tools, telemetry: true };
 
-        let resolved = resolve_tool("go-chained", Some(&config), "", Path::new("/bin/scrim"));
+        let resolved = resolve_tool("go-chained", Some(&config));
         assert_eq!(resolved, Err("Tool 'go-chained' references template 'gofmt', which is also a template. Template chaining is not allowed.".to_string()));
     }
 
@@ -262,24 +236,39 @@ mod tests {
         let config = Config { tools, telemetry: true };
 
         assert_eq!(
-            resolve_tool("err_path", Some(&config), "", Path::new("/bin/scrim")),
+            resolve_tool("err_path", Some(&config)),
             Err("Tool 'err_path' specifies 'system_path' which is mutually exclusive with fetch-related properties.".to_string())
         );
         assert_eq!(
-            resolve_tool("err_template", Some(&config), "", Path::new("/bin/scrim")),
+            resolve_tool("err_template", Some(&config)),
             Err("Tool 'err_template' specifies 'template' which is mutually exclusive with 'url' and 'sha256'.".to_string())
         );
         assert_eq!(
-            resolve_tool("err_sha", Some(&config), "", Path::new("/bin/scrim")),
+            resolve_tool("err_sha", Some(&config)),
             Err("Tool 'err_sha' specifies 'url' without 'sha256'. Both must be provided together.".to_string())
         );
         assert_eq!(
-            resolve_tool("err_archive", Some(&config), "", Path::new("/bin/scrim")),
+            resolve_tool("err_archive", Some(&config)),
             Err("Tool 'err_archive' specifies 'archive_path' but provides no 'url' or 'template'.".to_string())
         );
         assert_eq!(
-            resolve_tool("err_archive_template", Some(&config), "", Path::new("/bin/scrim")),
+            resolve_tool("err_archive_template", Some(&config)),
             Err("Tool 'err_archive_template' specifies 'archive_path' but the referenced template does not provide a fetchable archive.".to_string())
+        );
+
+        let mut tools2 = HashMap::new();
+        tools2.insert("empty_tool".to_string(), ToolConfig {
+            system_path: None,
+            url: None,
+            sha256: None,
+            archive_path: None,
+            template: None,
+        });
+        let config2 = Config { tools: tools2, telemetry: true };
+        
+        assert_eq!(
+            resolve_tool("empty_tool", Some(&config2)),
+            Err("Tool 'empty_tool' has an empty configuration. Every tool must specify a 'system_path', 'url', or 'template'.".to_string())
         );
     }
 }

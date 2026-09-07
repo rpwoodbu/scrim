@@ -67,16 +67,11 @@ tools:
     fs::write(&config_path, yaml).unwrap();
     let config = config::read_config(&config_path).unwrap();
 
-    let path_env = "/usr/local/bin:/usr/bin:/bin";
-    let current_exe = PathBuf::from("/bin/scrim");
-
     c.bench_function("resolve_tool", |b| {
         b.iter(|| {
             resolver::resolve_tool(
                 black_box("node"),
                 black_box(Some(&config)),
-                black_box(path_env),
-                black_box(&current_exe),
             )
         })
     });

@@ -11,7 +11,7 @@ fn main() {
         return;
     }
 
-    let current_exe = env::current_exe().expect("Failed to get current executable path");
+
     let program_name = Path::new(&args[0])
         .file_name()
         .and_then(|s| s.to_str())
@@ -21,7 +21,7 @@ fn main() {
     if program_name == "scrim" {
         handle_management_command(&args);
     } else {
-        proxy_command(&program_name, &args, &current_exe);
+        proxy_command(&program_name, &args);
     }
 }
 
@@ -39,7 +39,7 @@ fn handle_management_command(args: &[std::ffi::OsString]) {
     }
 }
 
-fn proxy_command(program_name: &str, args: &[std::ffi::OsString], current_exe: &Path) {
+fn proxy_command(program_name: &str, args: &[std::ffi::OsString]) {
     let cwd = env::current_dir().expect("Failed to get current directory");
     let config_path = config::find_config(&cwd);
     
@@ -47,9 +47,7 @@ fn proxy_command(program_name: &str, args: &[std::ffi::OsString], current_exe: &
         config::read_config(&p).ok()
     });
 
-    let path_env = env::var("PATH").unwrap_or_default();
-    
-    let resolution = resolver::resolve_tool(program_name, config.as_ref(), &path_env, current_exe);
+    let resolution = resolver::resolve_tool(program_name, config.as_ref());
 
     match resolution {
         Ok(Some(res)) => {
@@ -96,7 +94,7 @@ fn proxy_command(program_name: &str, args: &[std::ffi::OsString], current_exe: &
             std::process::exit(1);
         }
         Ok(None) => {
-            scrim_lib::scrim_error!("Tool '{}' not found in config or PATH", program_name);
+            scrim_lib::scrim_error!("Tool '{}' not found in config", program_name);
             std::process::exit(1);
         }
         Err(e) => {
