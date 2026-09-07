@@ -10,6 +10,7 @@
 
 ## Core Design Principles
 
+- **Design-Driven Rigor**: All user-visible functionality and significant implementation details MUST be specified in this design document. Other implementation details MAY also be specified here.
 - **Test-Driven Rigor**: All functionality must be covered by tests. All bugs must be proven with a test included with the fix.
 - **Performance**: The critical path (resolving and executing a tool) must be as close to zero-overhead as possible.
 - **Transparency**: Users should interact with their tools normally; Scrim stays behind the curtain.
@@ -54,6 +55,7 @@ Scrim works by acting as a drop-in shim for developer tools. Unlike tools that r
 - Users create symlinks or hardlinks (for slightly better performance) named as the commands they wish to wrap (e.g., `node`, `go`) in a directory already in their `PATH` (e.g., `/usr/local/bin` or `~/.local/bin`).
 - These links all point to the single `scrim` binary.
 - `scrim` uses the `argv[0]` (the command name) to determine which tool it is proxying.
+- **Exception**: If `argv[0]` is `scrim` itself, it presents a management CLI (e.g., for `scrim version`).
 
 ### Resolution Logic
 When a command (e.g., `node`) is invoked, Scrim follows this resolution order:
@@ -79,7 +81,7 @@ When a command (e.g., `node`) is invoked, Scrim follows this resolution order:
 ### Upward Search Heuristics
 To minimize filesystem overhead during resolution:
 - Scrim will search upwards from the CWD for a configuration file.
-- **Future Optimization**: To prevent unnecessary `stat` calls in large directory trees, Scrim can stop the search at known boundaries (e.g., the user's home directory or the first `.git` directory encountered).
+- The search will automatically stop if it encounters a known repository boundary (i.e., a `.git` directory) to prevent unnecessary `stat` calls in large directory trees.
 
 ### Execution
 To minimize overhead, Scrim will use `execve` (on Unix) to replace the current process with the target tool process. This ensures there is no "parent" Scrim process hanging around during tool execution.
@@ -90,7 +92,7 @@ Telemetry is gathered to track tool usage patterns.
 - **Implementation**: 
     - Scrim will `fork()` before executing the target tool.
     - The **Parent** process will immediately `execve()` the target tool to preserve the original PID and environment.
-    - The **Child** process will handle telemetry gathering and reporting in the background, then exit silently.
+    - The **Child** process will handle telemetry gathering and reporting in the background, then exit silently. Currently, telemetry is simply written to a hardcoded log file at `/tmp/scrim_telemetry.log`.
     - This ensures telemetry is completely decoupled from the tool's execution latency.
 
 ### Logging & User Communication
@@ -139,3 +141,5 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
 - **Cache Override Support**: Support environment variable overrides (e.g., `SCRIM_CACHE_DIR`) to configure the cache directory dynamically.
 - **Home Directory Search Boundary**: Stop upward directory traversal for `scrim.yaml` at `$HOME` to prevent scanning system directories when outside of a repository.
 - **Concurrency Safety**: Safely support simultaneous concurrent access, notably when fetching the tool.
+- **Native Fetching**: Replace external shell command dependencies (`curl`, `sha256sum`, `tar`, `unzip`) with native Rust crates to make the static binary truly self-contained.
+- **Configurable Telemetry**: Support configuring the telemetry behavior and output destination (rather than hardcoding `/tmp/scrim_telemetry.log`).
