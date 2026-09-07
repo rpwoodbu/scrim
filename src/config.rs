@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ToolConfig {
     pub system_path: Option<String>,
     pub url: Option<String>,
@@ -12,6 +13,7 @@ pub struct ToolConfig {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default = "default_telemetry")]
     pub telemetry: bool,
@@ -113,5 +115,21 @@ tools:
         assert_eq!(config.telemetry, true);
         assert_eq!(config.tools.get("node").unwrap().system_path.as_ref().unwrap(), "/usr/local/bin/node");
         assert_eq!(config.tools.get("go").unwrap().url.as_ref().unwrap(), "https://go.dev/dl/go1.21.5.linux-amd64.tar.gz");
+    }
+
+    #[test]
+    fn test_parse_config_rejects_unknown_fields() {
+        let yaml = r#"
+telemetry: true
+tools:
+  go:
+    url: https://go.dev/dl/go1.21.5.linux-amd64.tar.gz
+    sha256: 285c1f0624022839446d32
+    acrhive_bin: go/bin/go
+"#;
+        let result: Result<Config, _> = serde_yaml::from_str(yaml);
+        assert!(result.is_err(), "Expected parsing to fail due to unknown field 'acrhive_bin'");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("unknown field `acrhive_bin`"), "Error should mention the unknown field");
     }
 }

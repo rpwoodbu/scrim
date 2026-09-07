@@ -54,11 +54,12 @@ When a command (e.g., `node`) is invoked, Scrim follows this resolution order:
     - **Tool Templates**: A tool can specify a `template: <tool_name>` property to inherit the `url` and `sha256` of another tool configuration, minimizing repetition and preventing mismatches within toolchains. Template chains are not allowed; a templated entry must directly reference a concrete tool configuration.
     
     - **Configuration Validation**: To enforce the **Actionable UX** principle, Scrim will explicitly reject invalid configurations with clear error messages rather than silently ignoring properties. Specifically:
-        1. `system_path` is mutually exclusive with all fetch-related properties (`url`, `sha256`, `template`, `archive_path`).
-        2. `template` is mutually exclusive with `url` and `sha256`.
-        3. If a tool requires fetching, both `url` and `sha256` must be present (neither can be provided without the other).
-        4. `archive_path` cannot be provided if the tool doesn't resolve to a fetchable archive (i.e., no `url` or `template` is provided).
-        5. Empty tool configurations are valid (e.g., used only to enable telemetry for a tool found in `PATH`).
+        1. YAML parsing must be strict: unknown or misspelled fields must be rejected with an error rather than silently ignored.
+        2. `system_path` is mutually exclusive with all fetch-related properties (`url`, `sha256`, `template`, `archive_path`).
+        3. `template` is mutually exclusive with `url` and `sha256`.
+        4. If a tool requires fetching, both `url` and `sha256` must be present (neither can be provided without the other).
+        5. `archive_path` cannot be provided if the tool doesn't resolve to a fetchable archive (i.e., no `url` or `template` is provided).
+        6. Empty tool configurations are valid (e.g., used only to enable telemetry for a tool found in `PATH`).
 
 2.  **User/System Default**: If no repository override is found, Scrim falls back to a user-level configuration (e.g., `~/.config/scrim/scrim.yaml`) or a system-level configuration (e.g., `/etc/scrim/scrim.yaml`).
 3.  **Path Resolution**:
