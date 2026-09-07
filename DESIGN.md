@@ -10,7 +10,7 @@
 
 ## Core Design Principles
 
-- **Test-Driven Rigor**: All functionality must be covered by tests.
+- **Test-Driven Rigor**: All functionality must be covered by tests. All bugs must be proven with a test included with the fix.
 - **Performance**: The critical path (resolving and executing a tool) must be as close to zero-overhead as possible.
 - **Transparency**: Users should interact with their tools normally; Scrim stays behind the curtain.
 - **Actionable UX**: Errors must be explicit, actionable, and clear. Scrim should never fail silently or present opaque errors for misconfigurations.
