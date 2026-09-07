@@ -44,7 +44,7 @@ When a command (e.g., `node`) is invoked, Scrim follows this resolution order:
         url: https://go.dev/dl/go1.21.5.linux-amd64.tar.gz
         sha256: 285c1f0624022839446d32
     ```
-2.  **User/System Default**: If no repository override is found, Scrim falls back to a user-level configuration (e.g., `~/.config/scrim/config.json`) or a system-level configuration (e.g., `/etc/scrim/config.json`).
+2.  **User/System Default**: If no repository override is found, Scrim falls back to a user-level configuration (e.g., `~/.config/scrim/scrim.yaml`) or a system-level configuration (e.g., `/etc/scrim/scrim.yaml`).
 3.  **Path Resolution**:
     - If the resolved version is a **Path**, execute it directly.
     - If the resolved version needs to be **Fetched**, check `~/.cache/scrim/` (or an overridden cache path). If missing, fetch it synchronously (with a progress indicator) and then execute.
@@ -101,3 +101,6 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
 ## Future Work
 - **Unpacking Support**: Automatic extraction of `.tar.gz`, `.zip`, and other archive formats for fetched tools.
 - **Cache Management**: Commands to clean or inspect the `~/.cache/scrim` directory.
+- **Global Config Fallbacks**: Implement support for user-level (`~/.config/scrim/scrim.yaml`) and system-level (`/etc/scrim/scrim.yaml`) default configurations when no repository `scrim.yaml` is found.
+- **Cache Override Support**: Support environment variable overrides (e.g., `SCRIM_CACHE_DIR`) to configure the cache directory dynamically.
+- **Home Directory Search Boundary**: Stop upward directory traversal for `scrim.yaml` at `$HOME` to prevent scanning system directories when outside of a repository.
