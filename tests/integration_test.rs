@@ -379,3 +379,81 @@ tools:
         .join("demotool");
     assert!(expected_cache_path.exists(), "HTTP cached path not populated!");
 }
+
+#[test]
+fn test_e2e_unpack_output() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    // 1. Create a mock tool script inside a directory to be archived
+    let archive_src_dir = temp_path.join("archive_src");
+    fs::create_dir_all(&archive_src_dir).unwrap();
+    let mock_tool = archive_src_dir.join("demotool");
+    fs::write(&mock_tool, "#!/bin/sh\necho \"Archived Tool\"\n").unwrap();
+    
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&mock_tool).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&mock_tool, perms).unwrap();
+    }
+
+    // 2. Create the tar.gz archive
+    let archive_path = temp_path.join("mock.tar.gz");
+    let status = Command::new("tar")
+        .arg("-czf")
+        .arg(&archive_path)
+        .arg("-C")
+        .arg(&archive_src_dir)
+        .arg("demotool")
+        .status()
+        .expect("Failed to create mock tar.gz");
+    assert!(status.success());
+
+    let sha256 = compute_sha256(&archive_path);
+
+    // 3. Create scrim.yaml pointing to the file:// URL of the archive
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    let config_content = format!(
+        r#"
+telemetry: false
+tools:
+  demotool:
+    url: "file://{}"
+    sha256: "{}"
+"#,
+        archive_path.to_str().unwrap(),
+        sha256
+    );
+    fs::write(&scrim_yaml, config_content).unwrap();
+
+    // 4. Create symlink demotool -> scrim
+    let shim_path = temp_path.join("demotool");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &shim_path).unwrap();
+
+    let cache_home = temp_path.join("fake_home");
+    fs::create_dir_all(&cache_home).unwrap();
+
+    // 5. Run the shim and capture output
+    let output = Command::new(&shim_path)
+        .current_dir(temp_path)
+        .env("HOME", &cache_home)
+        .output()
+        .expect("Failed to run shim");
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+
+    assert!(output.status.success(), "Shim execution failed! Stderr: {}", stderr);
+    assert!(stdout.contains("Archived Tool"));
+    
+    // 6. Verify UX requirement: Output unpacking progress
+    assert!(
+        stderr.contains("Unpacking demotool archive..."),
+        "Stderr did not contain the unpacking UX message. Stderr: {:?}",
+        stderr
+    );
+}

@@ -65,6 +65,7 @@ pub fn fetch_tool(tool_name: &str, url: &str, sha256: &str, archive_path: Option
     }
 
     if is_archive {
+        eprintln!("Unpacking {} archive...", tool_name);
         if is_tar_gz {
             let status = Command::new("tar")
                 .arg("-xzf")

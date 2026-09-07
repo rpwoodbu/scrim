@@ -13,7 +13,7 @@
 - **Test-Driven Rigor**: All functionality must be covered by tests. All bugs must be proven with a test included with the fix.
 - **Performance**: The critical path (resolving and executing a tool) must be as close to zero-overhead as possible.
 - **Transparency**: Users should interact with their tools normally; Scrim stays behind the curtain.
-- **Actionable UX**: Errors must be explicit, actionable, and clear. Scrim should never fail silently or present opaque errors for misconfigurations.
+- **Actionable UX**: Errors must be explicit, actionable, and clear. Scrim should never fail silently or present opaque errors for misconfigurations. Additionally, Scrim must proactively inform the user during long-running operations (e.g., outputting that an archive is being unpacked).
 - **Reliability**: Failures in telemetry or other auxiliary tasks must never block or prevent tool execution.
 - **YAGNI (You Aren't Gonna Need It)**: Favor simplicity and minimal configuration. Avoid preemptive abstractions until they are strictly required.
 
