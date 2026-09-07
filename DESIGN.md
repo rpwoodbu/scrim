@@ -1,34 +1,36 @@
 # Scrim: Design & Architecture
 
-**Scrim** is a lightweight, transparent proxy for developer tools, designed to provide context-aware tool versioning without the overhead of environment manipulation.
+**Scrim** is a lightweight, transparent proxy for developer tools, designed to provide context-aware tool versioning without requiring shell hooks or environment manipulation.
+
+> [!IMPORTANT]
+> All changes to the project must be reflected in this document to ensure the architecture remains transparent and auditable.
 
 ## Core Design Principles
 
 - **Performance First**: The critical path (resolving and executing a tool) must be as close to zero-overhead as possible.
 - **Transparency**: Users should interact with their tools normally; Scrim stays behind the curtain.
-- **Reliability**: Failures in non-critical paths (like telemetry or fetching) must never block tool execution.
-- **Portability**: A single static binary with minimal dependencies.
+- **Reliability**: Failures in telemetry or other auxiliary tasks must never block or prevent tool execution.
 
 ## Technical Stack
 
 - **Language**: Rust (for memory safety, speed, and static linking).
-- **Build System**: Bazel (for reproducible and scalable builds).
+- **Build System**: Bazel (for reproducible builds).
 - **Distribution**: Single static binary.
 
 ## Architecture
 
 ### 1. The Proxy Mechanism
-Scrim works by acting as a shim for various developer tools. 
-- A single directory (e.g., `~/.scrim/bin`) is added to the user's `PATH`.
-- This directory contains symlinks or small "shim" binaries that all point back to the main `scrim` binary.
-- `scrim` uses the `arg[0]` (the command name) to determine which tool it is proxying.
+Scrim works by acting as a drop-in shim for developer tools. Unlike tools that require shell hooks, Scrim requires **zero shell configuration**. 
+- Users create symlinks or hardlinks (for slightly better performance) named as the commands they wish to wrap (e.g., `node`, `go`) in a directory already in their `PATH` (e.g., `/usr/local/bin` or `~/.local/bin`).
+- These links all point to the single `scrim` binary.
+- `scrim` uses the `argv[0]` (the command name) to determine which tool it is proxying.
 
 ### 2. Resolution Logic
 When a command (e.g., `node`) is invoked, Scrim follows this resolution order:
 
 1.  **Repository Override**: Search upwards from the current working directory (CWD) for a configuration file (e.g., `.scrim.json`). 
     - **Note**: For the initial implementation, we will prioritize an **easy-to-use and intuitive configuration format** to establish the user experience, then optimize for speed.
-2.  **User/System Default**: If no repository override is found, use a pre-configured global default.
+2.  **User/System Default**: If no repository override is found, Scrim falls back to a user-level configuration (e.g., `~/.config/scrim/config.json`) or a system-level configuration (e.g., `/etc/scrim/config.json`).
 3.  **Path Resolution**:
     - If the resolved version is a **Path**, execute it directly.
     - If the resolved version needs to be **Fetched**, check `~/.cache/scrim/` (or an overridden cache path). If missing, fetch it synchronously (with a progress indicator) and then execute.
@@ -52,7 +54,7 @@ Telemetry is gathered to track tool usage patterns.
 
 ## Build & Project Structure
 - Use Bazel with `rules_rust` for building the project.
-- The project will be structured to keep the "hot path" (proxying) separate from management logic (adding tools, fetching).
+- The project will be structured to ensure the "hot path" (proxying) is as efficient as possible.
 
 ---
 
@@ -61,8 +63,7 @@ Telemetry is gathered to track tool usage patterns.
 Performance is a primary design goal. To ensure Scrim remains thin and fast, we will implement rigorous performance monitoring.
 
 ### 1. Performance Thresholds
-- **Hot Path Overhead**: The time added by Scrim when a tool is already resolved (no fetch required) should be **< 2ms**.
-- **Cold Path Overhead**: (First resolution in a session) should be **< 10ms** (excluding network I/O for fetching).
+- **Hot Path Overhead**: The time added by Scrim when a tool is already resolved (no fetch required) should be **< 2ms**. This ensures that even when tools are called in rapid succession by scripts, the cumulative overhead remains negligible.
 
 ### 2. Microbenchmarks
 - We will use `criterion` or a similar Rust benchmarking suite to measure:
@@ -78,8 +79,3 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
     - Missing configurations (falling back to global defaults).
     - Failed fetches and fallback behavior.
 - **Telemetry Validation**: Tests to ensure that telemetry failure never impacts the main execution flow.
-
-## Open Design Decisions (Resolved)
-- **Shim Strategy**: Single binary with `argv[0]` detection. Symlinks will point to the `scrim` binary.
-- **Configuration Format**: Scrim-specific configuration only (e.g., `.scrim.json`). We will prioritize simplicity and speed over native support for other tools' config files.
-- **Fetching Mechanism**: Use external binaries (like `curl`) for downloads to keep the Scrim binary size to a minimum.
