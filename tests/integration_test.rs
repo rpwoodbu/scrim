@@ -271,3 +271,99 @@ tools:
         log_content
     );
 }
+
+#[test]
+fn test_e2e_http_download() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    // 1. Create the mock tool file locally to compute its hash and get its bytes
+    let temp_src = temp_path.join("temp_src");
+    let mock_content = "#!/bin/sh\necho \"HTTP Mock Executed: args=$*\"\n";
+    fs::write(&temp_src, mock_content).unwrap();
+
+    let sha256 = compute_sha256(&temp_src);
+    let mock_bytes = fs::read(&temp_src).unwrap();
+
+    // 2. Start our inline mock HTTP server on an ephemeral port
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind TcpListener");
+    let port = listener.local_addr().unwrap().port();
+    let mock_server_url = format!("http://127.0.0.1:{}/demotool", port);
+
+    let server_thread = thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let mut buffer = [0; 1024];
+            let _ = stream.read(&mut buffer);
+
+            // Respond with HTTP/1.1 OK and static file content
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n",
+                mock_bytes.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(&mock_bytes);
+            let _ = stream.flush();
+        }
+    });
+
+    // 3. Create scrim.yaml in the temp directory pointing to the localhost mock URL
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    let config_content = format!(
+        r#"
+telemetry: false
+tools:
+  demotool:
+    url: "{}"
+    sha256: "{}"
+"#,
+        mock_server_url,
+        sha256
+    );
+    fs::write(&scrim_yaml, config_content).unwrap();
+
+    // 4. Create a symlink named "demotool" pointing to "scrim"
+    let shim_path = temp_path.join("demotool");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &shim_path).unwrap();
+
+    // Override HOME to isolate the cache
+    let cache_home = temp_path.join("fake_home");
+    fs::create_dir_all(&cache_home).unwrap();
+
+    // 5. Execute the symlink shim
+    let output = Command::new(&shim_path)
+        .arg("hello")
+        .arg("network")
+        .current_dir(temp_path)
+        .env("HOME", &cache_home)
+        .output()
+        .expect("Failed to execute demotool shim via HTTP");
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+
+    println!("STDOUT: {}", stdout);
+    println!("STDERR: {}", stderr);
+
+    assert!(output.status.success(), "HTTP download execution failed!");
+    assert!(
+        stdout.contains("HTTP Mock Executed: args=hello network"),
+        "Stdout did not contain expected network output: {:?}",
+        stdout
+    );
+
+    // Wait for the server thread to finish cleanly
+    server_thread.join().expect("HTTP mock server thread panicked");
+
+    // 6. Verify cache population
+    let expected_cache_path = cache_home
+        .join(".cache/scrim/tools/demotool")
+        .join(&sha256)
+        .join("demotool");
+    assert!(expected_cache_path.exists(), "HTTP cached path not populated!");
+}
