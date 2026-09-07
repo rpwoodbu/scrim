@@ -1,0 +1,15 @@
+# Bazel
+/bazel-*
+
+# Rust
+/target
+
+# IDEs
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Antigravity
+.antigravitycli/

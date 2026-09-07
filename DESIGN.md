@@ -38,7 +38,11 @@ To minimize overhead, Scrim will use `execve` (on Unix) to replace the current p
 ### 4. Telemetry Hook
 Telemetry is gathered to track tool usage patterns.
 - **Constraint**: Must never block or cause the tool to fail.
-- **Implementation**: Telemetry data will be handed off to a background process or written to a non-blocking queue/file for later processing. The main execution path should not wait for network I/O.
+- **Implementation**: 
+    - Scrim will `fork()` before executing the target tool.
+    - The **Parent** process will immediately `execve()` the target tool to preserve the original PID and environment.
+    - The **Child** process will handle telemetry gathering and reporting in the background, then exit silently.
+    - This ensures telemetry is completely decoupled from the tool's execution latency.
 
 ## Build & Project Structure
 - Use Bazel with `rules_rust` for building the project.
