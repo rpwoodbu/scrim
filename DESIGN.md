@@ -50,6 +50,29 @@ Telemetry is gathered to track tool usage patterns.
 
 ---
 
+## Testing & Performance
+
+Performance is a primary design goal. To ensure Scrim remains thin and fast, we will implement rigorous performance monitoring.
+
+### 1. Performance Thresholds
+- **Hot Path Overhead**: The time added by Scrim when a tool is already resolved (no fetch required) should be **< 2ms**.
+- **Cold Path Overhead**: (First resolution in a session) should be **< 10ms** (excluding network I/O for fetching).
+
+### 2. Microbenchmarks
+- We will use `criterion` or a similar Rust benchmarking suite to measure:
+    - Config resolution time (searching parent directories).
+    - Parsing time for the configuration file.
+    - Forking and `execve` overhead.
+- Benchmarks will be integrated into the Bazel build pipeline.
+
+### 3. Testing Strategy
+- **Unit Tests**: Every core module (resolution, parsing, environment handling) must have high test coverage.
+- **Integration Tests**: Bazel `sh_test` or `rust_test` targets that simulate:
+    - Deeply nested project structures.
+    - Missing configurations (falling back to global defaults).
+    - Failed fetches and fallback behavior.
+- **Telemetry Validation**: Tests to ensure that telemetry failure never impacts the main execution flow.
+
 ## Open Design Decisions (Resolved)
 - **Shim Strategy**: Single binary with `argv[0]` detection. Symlinks will point to the `scrim` binary.
 - **Configuration Format**: Scrim-specific configuration only (e.g., `.scrim.json`). We will prioritize simplicity and speed over native support for other tools' config files.
