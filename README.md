@@ -1,0 +1,70 @@
+# Scrim
+
+**Scrim** is a lightweight, transparent proxy for developer tools, designed to provide context-aware tool versioning without requiring shell hooks, profile modifications, or environment variables.
+
+> **Origin of the Name:**  
+> The name *Scrim* refers to the thin, translucent fabric used in theater to create lighting effects or hide/reveal elements on stage. It represents a "thin" proxy that stays completely out of sight until needed.
+
+---
+
+## Key Features
+
+- **Zero-Hook Integration:** Simply link Scrim to any tool name in your `PATH` (e.g., `node`, `go`). Scrim handles the rest based on your current directory.
+- **Upward Search Resolution:** Scrim looks upwards from your current working directory to find the nearest `scrim.yaml` config file, stopping at repository (`.git`) boundaries to keep filesystem overhead near zero.
+- **Dual Resolution Modes:**
+  - **Local Path:** Instantly routes to a pre-installed local executable.
+  - **URL Fetching & Caching:** Dynamically downloads a tool from a specified URL via `curl`, validates its integrity using `sha256sum`, marks it executable, and caches it in `~/.cache/scrim/` for instant subsequent executions.
+- **Non-Blocking Telemetry:** Fork-based telemetry runs execution reporting in a background child process, ensuring tool invocation latency remains completely unaffected.
+
+---
+
+## Configuration (`scrim.yaml`)
+
+Define a `scrim.yaml` at the root of your project:
+
+```yaml
+telemetry: true
+tools:
+  node:
+    path: /usr/local/bin/node
+  go:
+    url: https://go.dev/dl/go1.21.5.linux-amd64.tar.gz
+    sha256: 285c1f0624022839446d32839446d32839446d32839446d32839446d32839446
+```
+
+---
+
+## Installation & Setup
+
+1. Build the Scrim executable:
+   ```bash
+   bazel build //:scrim
+   ```
+2. Copy the built `scrim` binary to a stable directory in your `PATH` (e.g., `~/.local/bin`):
+   ```bash
+   cp bazel-bin/scrim ~/.local/bin/scrim
+   ```
+3. Create symlinks for the tools you want to wrap pointing to the stable `scrim` binary:
+   ```bash
+   ln -s scrim ~/.local/bin/node
+   ln -s scrim ~/.local/bin/go
+   ```
+4. Create a `scrim.yaml` in your project folder, and run your command normally:
+   ```bash
+   node app.js
+   ```
+
+---
+
+## Development
+
+### Building
+```bash
+bazel build //...
+```
+
+### Running Tests
+The test suite includes cargo unit tests and E2E integration tests simulating network downloads and telemetry forks:
+```bash
+bazel test //...
+```
