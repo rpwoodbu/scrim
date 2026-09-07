@@ -41,13 +41,15 @@ fn handle_management_command(args: &[std::ffi::OsString]) {
 
 fn proxy_command(program_name: &str, args: &[std::ffi::OsString]) {
     let cwd = env::current_dir().expect("Failed to get current directory");
-    let config_path = config::find_config(&cwd);
-    
-    let config = config_path.and_then(|p| {
-        config::read_config(&p).ok()
-    });
+    let config = match config::load_config(&cwd) {
+        Ok(c) => c,
+        Err(e) => {
+            scrim_lib::scrim_error!("Failed to load configuration: {}", e);
+            std::process::exit(1);
+        }
+    };
 
-    let resolution = resolver::resolve_tool(program_name, config.as_ref());
+    let resolution = resolver::resolve_tool(program_name, Some(&config));
 
     match resolution {
         Ok(Some(res)) => {
@@ -73,7 +75,7 @@ fn proxy_command(program_name: &str, args: &[std::ffi::OsString]) {
             }
 
             // Fork for telemetry (non-blocking) if enabled in config
-            let enable_telemetry = config.as_ref().map(|c| c.telemetry).unwrap_or(true);
+            let enable_telemetry = config.telemetry_enabled();
             if enable_telemetry {
                 unsafe {
                     let pid = libc::fork();

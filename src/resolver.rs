@@ -98,7 +98,7 @@ mod tests {
         });
         let config = Config { 
             tools,
-            telemetry: true,
+            telemetry: Some(true),
         };
 
         let resolved = resolve_tool("node", Some(&config));
@@ -115,7 +115,7 @@ mod tests {
             archive_path: None,
             template: None,
         });
-        let config = Config { tools, telemetry: true };
+        let config = Config { tools, telemetry: Some(true) };
 
         let resolved = resolve_tool("go", Some(&config));
         assert_eq!(resolved, Ok(Some(Resolution::Fetch { 
@@ -142,7 +142,7 @@ mod tests {
             archive_path: Some("go/bin/gofmt".to_string()),
             template: Some("go".to_string()),
         });
-        let config = Config { tools, telemetry: true };
+        let config = Config { tools, telemetry: Some(true) };
 
         let resolved = resolve_tool("gofmt", Some(&config));
         assert_eq!(resolved, Ok(Some(Resolution::Fetch { 
@@ -176,7 +176,7 @@ mod tests {
             archive_path: Some("go/bin/go-chained".to_string()),
             template: Some("gofmt".to_string()),
         });
-        let config = Config { tools, telemetry: true };
+        let config = Config { tools, telemetry: Some(true) };
 
         let resolved = resolve_tool("go-chained", Some(&config));
         assert_eq!(resolved, Err("Tool 'go-chained' references template 'gofmt', which is also a template. Template chaining is not allowed.".to_string()));
@@ -233,7 +233,7 @@ mod tests {
             template: None,
         });
 
-        let config = Config { tools, telemetry: true };
+        let config = Config { tools, telemetry: Some(true) };
 
         assert_eq!(
             resolve_tool("err_path", Some(&config)),
@@ -264,7 +264,7 @@ mod tests {
             archive_path: None,
             template: None,
         });
-        let config2 = Config { tools: tools2, telemetry: true };
+        let config2 = Config { tools: tools2, telemetry: Some(true) };
         
         assert_eq!(
             resolve_tool("empty_tool", Some(&config2)),

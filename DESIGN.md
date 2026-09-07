@@ -58,9 +58,13 @@ Scrim works by acting as a drop-in shim for developer tools. Unlike tools that r
 - **Exception**: If `argv[0]` is `scrim` itself, it presents a management CLI (e.g., for `scrim version`).
 
 ### Resolution Logic
-When a command (e.g., `node`) is invoked, Scrim follows this resolution order:
+When a command (e.g., `node`) is invoked, Scrim follows this resolution logic:
 
-1.  **Repository Override**: Search upwards from the current working directory (CWD) for a configuration file (`scrim.yaml`). 
+1.  **Configuration Layering**: Scrim resolves configurations by aggregating them across multiple layers. The resultant configuration includes all tools found across all layers. In cases where the same tool or global setting is defined in multiple layers, the layer with the highest precedence wins (i.e., precedence is evaluated on a per-tool basis). The configuration layers, in increasing order of precedence, are:
+    1. **System-Level Configuration**: `/etc/scrim/scrim.yaml`
+    2. **User-Level Configuration**: `~/.config/scrim/scrim.yaml`
+    3. **Recursive Search**: Search upwards from the current working directory (CWD) for `scrim.yaml` files. To minimize filesystem overhead, the search automatically stops when it encounters a known repository boundary (e.g., a `.git` directory). Configuration files found in child directories take precedence over those found in their parent directories.
+2.  **Configuration Rules**:
     - **Note**: The configuration uses YAML and separates global settings (like `telemetry`) from tool-specific configurations.
     - **Tool Templates**: A tool can specify a `template: <tool_name>` property to inherit the `url` and `sha256` of another tool configuration, minimizing repetition and preventing mismatches within toolchains. Template chains are not allowed; a templated entry must directly reference a concrete tool configuration.
     
@@ -72,16 +76,10 @@ When a command (e.g., `node`) is invoked, Scrim follows this resolution order:
         5. `archive_path` cannot be provided if the tool doesn't resolve to a fetchable archive (i.e., no `url` or `template` is provided).
         6. Empty tool configurations are invalid. Every tool must specify a `system_path`, a `url` (with `sha256`), or a `template`.
 
-2.  **User/System Default**: If no repository override is found, Scrim falls back to a user-level configuration (e.g., `~/.config/scrim/scrim.yaml`) or a system-level configuration (e.g., `/etc/scrim/scrim.yaml`).
 3.  **Execution**:
     - If the resolved version is a **Local Path** (via `system_path`), execute it directly.
     - If the resolved version needs to be **Fetched**, check `~/.cache/scrim/tools/<sha256>/`. Caching purely by the `sha256` digest (omitting the tool name) maximizes cache hits when multiple repositories or templated aliases refer to the same payload.
     - If missing, fetch it synchronously, verify the digest, extract the archive (if applicable), and then execute.
-
-### Upward Search Heuristics
-To minimize filesystem overhead during resolution:
-- Scrim will search upwards from the CWD for a configuration file.
-- The search will automatically stop if it encounters a known repository boundary (i.e., a `.git` directory) to prevent unnecessary `stat` calls in large directory trees.
 
 ### Execution
 To minimize overhead, Scrim will use `execve` (on Unix) to replace the current process with the target tool process. This ensures there is no "parent" Scrim process hanging around during tool execution.
@@ -137,7 +135,6 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
 
 ## Future Work
 - **Cache Management**: Commands to clean or inspect the `~/.cache/scrim` directory.
-- **Global Config Fallbacks**: Implement support for user-level (`~/.config/scrim/scrim.yaml`) and system-level (`/etc/scrim/scrim.yaml`) default configurations when no repository `scrim.yaml` is found.
 - **Cache Override Support**: Support environment variable overrides (e.g., `SCRIM_CACHE_DIR`) to configure the cache directory dynamically.
 - **Home Directory Search Boundary**: Stop upward directory traversal for `scrim.yaml` at `$HOME` to prevent scanning system directories when outside of a repository.
 - **Concurrency Safety**: Safely support simultaneous concurrent access, notably when fetching the tool.

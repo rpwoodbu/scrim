@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ToolConfig {
     pub system_path: Option<String>,
@@ -12,24 +12,56 @@ pub struct ToolConfig {
     pub template: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    #[serde(default = "default_telemetry")]
-    pub telemetry: bool,
+    #[serde(default)]
+    pub telemetry: Option<bool>,
+    #[serde(default)]
     pub tools: HashMap<String, ToolConfig>,
 }
 
-fn default_telemetry() -> bool {
-    true
+impl Config {
+    pub fn telemetry_enabled(&self) -> bool {
+        self.telemetry.unwrap_or(true)
+    }
+
+    pub fn merge(mut self, other: Config) -> Self {
+        if let Some(t) = other.telemetry {
+            self.telemetry = Some(t);
+        }
+        self.tools.extend(other.tools);
+        self
+    }
 }
 
-pub fn find_config(start_path: &Path) -> Option<PathBuf> {
+pub fn load_config(start_path: &Path) -> Result<Config, Box<dyn std::error::Error>> {
+    let mut config = Config::default();
+
+    // 1. System-Level Configuration
+    let sys_config_path = Path::new("/etc/scrim/scrim.yaml");
+    if sys_config_path.exists() {
+        let c = read_config(sys_config_path)?;
+        config = config.merge(c);
+    }
+
+    // 2. User-Level Configuration
+    if let Ok(home) = std::env::var("HOME") {
+        let user_config_path = Path::new(&home).join(".config/scrim/scrim.yaml");
+        if user_config_path.exists() {
+            let c = read_config(&user_config_path)?;
+            config = config.merge(c);
+        }
+    }
+
+    // 3. Recursive Search
     let mut current = start_path.to_path_buf();
+    let mut search_paths = Vec::new();
+    
     loop {
         let config_file = current.join("scrim.yaml");
         if config_file.exists() {
-            return Some(config_file);
+            search_paths.push(config_file);
         }
         
         // Stop search if we hit a .git directory (repo boundary)
@@ -41,7 +73,14 @@ pub fn find_config(start_path: &Path) -> Option<PathBuf> {
             break;
         }
     }
-    None
+    
+    // Reverse so parents are merged before children
+    for path in search_paths.into_iter().rev() {
+        let c = read_config(&path)?;
+        config = config.merge(c);
+    }
+    
+    Ok(config)
 }
 
 pub fn read_config(path: &Path) -> Result<Config, Box<dyn std::error::Error>> {
@@ -57,37 +96,63 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn test_find_config_in_current_dir() {
+    fn test_load_config_in_current_dir() {
         let dir = tempdir().unwrap();
+        // Override HOME so it doesn't pick up dev env configs
+        std::env::set_var("HOME", dir.path());
+        
         let config_path = dir.path().join("scrim.yaml");
         fs::write(&config_path, "{}").unwrap();
 
-        assert_eq!(find_config(dir.path()), Some(config_path));
+        let config = load_config(dir.path()).unwrap();
+        assert!(config.tools.is_empty());
     }
 
     #[test]
-    fn test_find_config_in_parent_dir() {
+    fn test_load_config_layering() {
         let root = tempdir().unwrap();
-        let config_path = root.path().join("scrim.yaml");
-        fs::write(&config_path, "{}").unwrap();
+        std::env::set_var("HOME", root.path());
 
-        let child = root.path().join("child/grandchild");
+        // Parent config
+        let parent_config_path = root.path().join("scrim.yaml");
+        fs::write(&parent_config_path, "telemetry: false\ntools:\n  foo: { system_path: '/bin/parent_foo' }\n  bar: { system_path: '/bin/parent_bar' }").unwrap();
+
+        let child = root.path().join("child");
         fs::create_dir_all(&child).unwrap();
 
-        assert_eq!(find_config(&child), Some(config_path));
+        // Child config
+        let child_config_path = child.join("scrim.yaml");
+        fs::write(&child_config_path, "telemetry: true\ntools:\n  foo: { system_path: '/bin/child_foo' }").unwrap();
+
+        let config = load_config(&child).unwrap();
+        
+        // Child wins for telemetry
+        assert_eq!(config.telemetry, Some(true));
+        
+        // Child wins for foo
+        assert_eq!(config.tools.get("foo").unwrap().system_path.as_deref(), Some("/bin/child_foo"));
+        
+        // Parent retained for bar
+        assert_eq!(config.tools.get("bar").unwrap().system_path.as_deref(), Some("/bin/parent_bar"));
     }
 
     #[test]
-    fn test_find_config_not_found() {
+    fn test_load_config_not_found() {
         let dir = tempdir().unwrap();
-        assert_eq!(find_config(dir.path()), None);
+        std::env::set_var("HOME", dir.path());
+        
+        let config = load_config(dir.path()).unwrap();
+        assert!(config.tools.is_empty());
     }
 
     #[test]
-    fn test_find_config_stops_at_git() {
+    fn test_load_config_stops_at_git() {
         let root = tempdir().unwrap();
+        std::env::set_var("HOME", root.path());
+        
+        // Config outside repo
         let config_path = root.path().join("scrim.yaml");
-        fs::write(&config_path, "{}").unwrap();
+        fs::write(&config_path, "tools:\n  outside: { system_path: '/bin/out' }").unwrap();
 
         let repo_root = root.path().join("repo");
         let git_dir = repo_root.join(".git");
@@ -96,8 +161,9 @@ mod tests {
         let child = repo_root.join("child");
         fs::create_dir_all(&child).unwrap();
 
-        // Should return None because it shouldn't look past the .git directory
-        assert_eq!(find_config(&child), None);
+        // Should return empty because it stops at .git and doesn't see outside config
+        let config = load_config(&child).unwrap();
+        assert!(!config.tools.contains_key("outside"));
     }
 
     #[test]
@@ -112,7 +178,7 @@ tools:
     sha256: 285c1f0624022839446d32
 "#;
         let config: Config = serde_yaml::from_str(yaml).unwrap();
-        assert_eq!(config.telemetry, true);
+        assert_eq!(config.telemetry, Some(true));
         assert_eq!(config.tools.get("node").unwrap().system_path.as_ref().unwrap(), "/usr/local/bin/node");
         assert_eq!(config.tools.get("go").unwrap().url.as_ref().unwrap(), "https://go.dev/dl/go1.21.5.linux-amd64.tar.gz");
     }
