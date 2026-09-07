@@ -2,6 +2,9 @@
 
 **Scrim** is a lightweight, transparent proxy for developer tools, designed to provide context-aware tool versioning without requiring shell hooks or environment manipulation.
 
+> [!NOTE]
+> The name **Scrim** refers to the thin, translucent fabric used in theater to create lighting effects or hide/reveal elements on stage. It reflects our goal of being a "thin" proxy that stays behind the curtain until needed.
+
 > [!IMPORTANT]
 > All changes to the project must be reflected in this document to ensure the architecture remains transparent and auditable.
 
@@ -28,8 +31,19 @@ Scrim works by acting as a drop-in shim for developer tools. Unlike tools that r
 ### 2. Resolution Logic
 When a command (e.g., `node`) is invoked, Scrim follows this resolution order:
 
-1.  **Repository Override**: Search upwards from the current working directory (CWD) for a configuration file (e.g., `.scrim.json`). 
-    - **Note**: For the initial implementation, we will prioritize an **easy-to-use and intuitive configuration format** to establish the user experience, then optimize for speed.
+1.  **Repository Override**: Search upwards from the current working directory (CWD) for a configuration file (`scrim.yaml`). 
+    - **Note**: The configuration uses YAML and separates global settings (like `telemetry`) from tool-specific configurations.
+    
+    Example `scrim.yaml`:
+    ```yaml
+    telemetry: true
+    tools:
+      node:
+        path: /usr/local/bin/node
+      go:
+        url: https://go.dev/dl/go1.21.5.linux-amd64.tar.gz
+        sha256: 285c1f0624022839446d32
+    ```
 2.  **User/System Default**: If no repository override is found, Scrim falls back to a user-level configuration (e.g., `~/.config/scrim/config.json`) or a system-level configuration (e.g., `/etc/scrim/config.json`).
 3.  **Path Resolution**:
     - If the resolved version is a **Path**, execute it directly.
@@ -79,3 +93,7 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
     - Missing configurations (falling back to global defaults).
     - Failed fetches and fallback behavior.
 - **Telemetry Validation**: Tests to ensure that telemetry failure never impacts the main execution flow.
+
+## Future Work
+- **Unpacking Support**: Automatic extraction of `.tar.gz`, `.zip`, and other archive formats for fetched tools.
+- **Cache Management**: Commands to clean or inspect the `~/.cache/scrim` directory.
