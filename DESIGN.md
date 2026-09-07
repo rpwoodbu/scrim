@@ -24,40 +24,42 @@
 - **Attribution**: All error output must clearly indicate that it originates from Scrim.
 - **Visibility**: Proactively inform the user during long-running operations (e.g., unpacking archives).
 
-## Technical Stack
+### Configuration
+
+Example `scrim.yaml`:
+```yaml
+telemetry: true
+tools:
+  node:
+    system_path: /usr/local/bin/node
+  go:
+    url: https://go.dev/dl/go1.21.5.linux-amd64.tar.gz
+    sha256: 285c1f0624022839446d32
+    archive_path: go/bin/go
+  gofmt:
+    template: go
+    archive_path: go/bin/gofmt
+```
+
+## Architecture
+
+### Technical Stack
 
 - **Language**: Rust (for memory safety, speed, and static linking).
 - **Build System**: Bazel (for reproducible builds).
 - **Distribution**: Single static binary.
 
-## Architecture
-
-### 1. The Proxy Mechanism
+### The Proxy Mechanism
 Scrim works by acting as a drop-in shim for developer tools. Unlike tools that require shell hooks, Scrim requires **zero shell configuration**. 
 - Users create symlinks or hardlinks (for slightly better performance) named as the commands they wish to wrap (e.g., `node`, `go`) in a directory already in their `PATH` (e.g., `/usr/local/bin` or `~/.local/bin`).
 - These links all point to the single `scrim` binary.
 - `scrim` uses the `argv[0]` (the command name) to determine which tool it is proxying.
 
-### 2. Resolution Logic
+### Resolution Logic
 When a command (e.g., `node`) is invoked, Scrim follows this resolution order:
 
 1.  **Repository Override**: Search upwards from the current working directory (CWD) for a configuration file (`scrim.yaml`). 
     - **Note**: The configuration uses YAML and separates global settings (like `telemetry`) from tool-specific configurations.
-    
-    Example `scrim.yaml`:
-    ```yaml
-    telemetry: true
-    tools:
-      node:
-        system_path: /usr/local/bin/node
-      go:
-        url: https://go.dev/dl/go1.21.5.linux-amd64.tar.gz
-        sha256: 285c1f0624022839446d32
-        archive_path: go/bin/go
-      gofmt:
-        template: go
-        archive_path: go/bin/gofmt
-    ```
     - **Tool Templates**: A tool can specify a `template: <tool_name>` property to inherit the `url` and `sha256` of another tool configuration, minimizing repetition and preventing mismatches within toolchains. Template chains are not allowed; a templated entry must directly reference a concrete tool configuration.
     
     - **Configuration Validation**: To enforce the actionable UX principles, Scrim will explicitly reject invalid configurations with clear error messages rather than silently ignoring properties. Specifically:
@@ -74,15 +76,15 @@ When a command (e.g., `node`) is invoked, Scrim follows this resolution order:
     - If the resolved version needs to be **Fetched**, check `~/.cache/scrim/tools/<sha256>/`. Caching purely by the `sha256` digest (omitting the tool name) maximizes cache hits when multiple repositories or templated aliases refer to the same payload.
     - If missing, fetch it synchronously, verify the digest, extract the archive (if applicable), and then execute.
 
-### 3. Upward Search Heuristics
+### Upward Search Heuristics
 To minimize filesystem overhead during resolution:
 - Scrim will search upwards from the CWD for a configuration file.
 - **Future Optimization**: To prevent unnecessary `stat` calls in large directory trees, Scrim can stop the search at known boundaries (e.g., the user's home directory or the first `.git` directory encountered).
 
-### 4. Execution
+### Execution
 To minimize overhead, Scrim will use `execve` (on Unix) to replace the current process with the target tool process. This ensures there is no "parent" Scrim process hanging around during tool execution.
 
-### 5. Telemetry Hook
+### Telemetry Hook
 Telemetry is gathered to track tool usage patterns.
 - **Constraint**: Must never block or cause the tool to fail.
 - **Implementation**: 
@@ -91,7 +93,7 @@ Telemetry is gathered to track tool usage patterns.
     - The **Child** process will handle telemetry gathering and reporting in the background, then exit silently.
     - This ensures telemetry is completely decoupled from the tool's execution latency.
 
-### 6. Logging & User Communication
+### Logging & User Communication
 Scrim avoids heavy external logging crates. Instead, it uses a lightweight, internal logging module (e.g., `src/logger.rs`) with custom macros (e.g., `scrim_error!`, `scrim_progress!`) to ensure consistent attribution.
 
 ## Build & Project Structure
@@ -105,23 +107,21 @@ The project enforces the following prescriptive layout:
     - Benchmark threshold tests must be marked as `manual` as they are not correctness tests and are subject to flakiness.
 - `/benches/`: Contains the statistical microbenchmark harness code.
 
----
-
 ## Testing & Performance
 
 Performance is a primary design goal. To ensure Scrim remains thin and fast, we will implement rigorous performance monitoring.
 
-### 1. Performance Thresholds
+### Performance Thresholds
 - **Hot Path Overhead**: The time added by Scrim when a tool is already resolved (no fetch required) should be **< 2ms**. This ensures that even when tools are called in rapid succession by scripts, the cumulative overhead remains negligible.
 
-### 2. Microbenchmarks
+### Microbenchmarks
 - We will use `criterion` or a similar Rust benchmarking suite to measure:
     - Config resolution time (searching parent directories).
     - Parsing time for the configuration file.
     - End-to-End (E2E) hot path shim overhead (exercising the full proxy flow).
 - Benchmarks will be integrated into the Bazel build pipeline.
 
-### 3. Testing Strategy
+### Testing Strategy
 - **Unit Tests**: Every core module (resolution, parsing, environment handling) must have high test coverage.
 - **Integration Tests**: Bazel `sh_test` or `rust_test` targets that simulate:
     - Deeply nested project structures.
@@ -130,7 +130,7 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
 - **Telemetry Validation**: Tests to ensure that telemetry failure never impacts the main execution flow.
 - **Performance Threshold Validation**: There must be a separate "manual" test target which will run the benchmarks such that they generate proper data and will automatically fail if the required performance thresholds (e.g., < 2ms overhead) are not met.
 
-### 4. Bug Regression Testing
+### Bug Regression Testing
 - **Regression Prevention**: If a bug is discovered, a dedicated regression test must be written that clearly reproduces and elucidates the bug, ensuring it never returns.
 
 ## Future Work
