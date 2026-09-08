@@ -1,18 +1,17 @@
 # Scrim
 
-**Scrim** is a lightweight, transparent proxy for developer tools, designed to provide context-aware tool versioning without requiring shell hooks, profile modifications, or environment variables.
+**Scrim** is a lightweight wrapper around command line tools offering version management and usage telemetry without the need for shell hooks. It can download and cache tools from the network, reducing system image maintenance toil.
 
 > **Origin of the Name:**  
 > The name *Scrim* refers to the thin, translucent fabric used in theater to create lighting effects or hide/reveal elements on stage. It represents a "thin" proxy that stays completely out of sight until needed.
 
 ## Key Features
 
-- **Zero-Hook Integration:** Simply link Scrim to any tool name in your `PATH` (e.g., `node`, `go`). Scrim handles the rest based on your current directory.
-- **Upward Search Resolution:** Scrim looks upwards from your current working directory to find the nearest `scrim.yaml` config file, stopping at repository (`.git`) boundaries to keep filesystem overhead near zero.
-- **Dual Resolution Modes:**
-  - **Local Path:** Instantly routes to a pre-installed local executable via `system_path`.
-  - **URL Fetching & Caching:** Dynamically downloads a tool from a specified URL via `curl`, validates its integrity using `sha256sum`, unpacks archives automatically (if configured with `archive_path`), and caches it in `~/.cache/scrim/` for instant subsequent executions. Tools can also inherit fetch properties from other tools using `template`.
-- **Non-Blocking Telemetry:** Fork-based telemetry runs execution reporting in a background child process, ensuring tool invocation latency remains completely unaffected.
+- **Layered version management:** `scrim.yaml` files define precisely which version of each tool to invoke based on the current working directory. All found `scrim.yaml` files are layered, with more local configuration taking precedence. See [Configuration](#configuration).
+- **Remote tool fetching:** Rather than maintain locally-installed tools, Scrim can fetch them from the network. It downloads the archive, unpacks it into a local cache, and executes the binary directly from the cache. Multiple versions of the same archive may be cached simultaneously. Downloads are hardened with a `sha256` hash, improving security and reproducibility.
+- **Easy installation:** Scrim is a single statically-linked binary. Create a symlink in your path for each tool Scrim should wrap which points to the `scrim` binary. There are no shell hooks; this will work in any shell and without user configuration.
+- **Non-blocking telemetry:** Get usage telemetry for the tools that are run, including full invocation information (coming soon). Telemetry is only performed once the proxied tool is called, removing telemetry from the critical path.
+- **Low overhead:** Scrim adds less than 2 milliseconds to the tool invocation.
 
 ## Installation
 
