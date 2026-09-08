@@ -2,3 +2,37 @@ alias(
     name = "scrim",
     actual = "//src:scrim",
 )
+
+constraint_setting(
+    name = "libc",
+    visibility = ["//visibility:public"],
+)
+
+constraint_value(
+    name = "musl",
+    constraint_setting = ":libc",
+    visibility = ["//visibility:public"],
+)
+
+platform(
+    name = "x86_64-unknown-linux-musl",
+    parents = ["@platforms//host"],
+    constraint_values = [
+        ":musl",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+toolchain(
+    name = "musl_rust_toolchain",
+    exec_compatible_with = [
+        "@platforms//cpu:x86_64",
+        "@platforms//os:linux",
+    ],
+    target_compatible_with = [
+        ":musl",
+    ],
+    toolchain = "@@rules_rust++rust+rust_linux_x86_64__x86_64-unknown-linux-musl__stable_tools//:rust_toolchain",
+    toolchain_type = "@rules_rust//rust:toolchain_type",
+    visibility = ["//visibility:public"],
+)

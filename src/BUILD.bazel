@@ -24,6 +24,10 @@ rust_binary(
     name = "scrim",
     srcs = ["main.rs"],
     edition = "2021",
+    rustc_flags = select({
+        "//:musl": ["-C", "relocation-model=static"],
+        "//conditions:default": [],
+    }),
     visibility = ["//visibility:public"],
     deps = [
         ":scrim_lib",

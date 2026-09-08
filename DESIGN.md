@@ -110,6 +110,7 @@ Scrim avoids heavy external logging crates. Instead, it uses a lightweight, inte
 
 ## Build & Project Structure
 - Use Bazel with `rules_rust` for building the project.
+- **Static Linking via musl**: Bazel and `rules_rust` are configured to target `x86_64-unknown-linux-musl` to eliminate runtime dynamic C library dependencies and ensure universal portability across Linux distributions.
 - **Modular Build Files**: To maintain a clean architecture, avoid a single overarching `BUILD.bazel` file at the repository root. Prefer individual `BUILD.bazel` files distributed within each logical segment of the project.
 
 ### CI/CD

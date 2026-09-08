@@ -4,15 +4,20 @@ module(
 )
 
 bazel_dep(name = "rules_rust", version = "0.74.0")
+bazel_dep(name = "platforms", version = "1.1.0")
 
 rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
 rust.toolchain(
     edition = "2021",
+    extra_target_triples = ["x86_64-unknown-linux-musl"],
     versions = ["1.98.1"],
 )
 use_repo(rust, "rust_toolchains")
 
-register_toolchains("@rust_toolchains//:all")
+register_toolchains(
+    "//:musl_rust_toolchain",
+    "@rust_toolchains//:all",
+)
 
 crate = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
 crate.spec(

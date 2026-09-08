@@ -1,2 +1,6 @@
 # Do not discover local toolchains
 common --repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=1
+
+# Always build target binaries targeting musl for static linking
+build --platforms=//:x86_64-unknown-linux-musl
+test --platforms=@platforms//host
