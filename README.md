@@ -53,6 +53,20 @@ go version go1.21.5 linux/amd64
 
 Run `scrim help` to see administrative functions.
 
+## Comparison to Alternatives
+
+There are many excellent tools in the ecosystem for managing environment variables and tool versions. However, Scrim is specifically designed to minimize configuration overhead, eliminate the need for shell hooks, fetch tools generically without plugins, and provide out-of-the-box telemetry for tool invocations.
+
+| Feature | Scrim | [`direnv`](https://direnv.net/) | [`asdf`](https://asdf-vm.com/) | [`mise`](https://mise.jdx.dev/) |
+| :--- | :---: | :---: | :---: | :---: |
+| **Version Management** | ✅ | ✅<br>*(via `$PATH`)* | ✅ | ✅ |
+| **Fetches Binaries** | ✅<br>*(Generic URLs)* | ❌ | ✅<br>*(via Plugins)* | ✅<br>*(via Plugins)* |
+| **On-Demand Fetching** | ✅ | ❌ | ❌ | ✅ |
+| **Zero Shell Hooks** | ✅ | ❌ | ❌<br>*(Often requires shims/hooks)* | ❌<br>*(Often requires shims/hooks)* |
+| **Invocation Telemetry** | ✅ | ❌ | ❌ | ❌ |
+| **Directory Nav. Overhead** | Zero | Low | Low | Low |
+| **Execution Overhead** | Very Low *(<2ms)* | Zero | [High *(~120ms)*](https://mac.install.guide/mise/mise-vs-asdf) | Low / Zero |
+
 ## Development
 
 ### AI
