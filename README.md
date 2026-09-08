@@ -77,6 +77,16 @@ However, Scrim is specifically designed to solve **enterprise fleet deployment**
 | **Directory Nav. Overhead** | Zero | Low | Zero | Zero | Low |
 | **Execution Overhead** | Very Low *(<2ms)* | Zero | Medium | Low | Zero |
 
+### The "Hooks vs. Shims" Trade-off
+
+Scrim is fundamentally built on a **pure shim architecture** because it must intercept every single execution to provide its core enterprise feature: **invocation telemetry**. If Scrim simply modified your shell's `$PATH` (like `mise activate` or `direnv` do), the OS would execute the binary directly. This would bypass Scrim entirely, making reliable telemetry gathering challenging. 
+
+Because Scrim is forced to sit in the critical path of every tool invocation, **relentless optimization for speed is existential**. This is why Scrim is written in Rust, uses native OS symlinks instead of Bash scripts, and safely `fork()`s its telemetry reporting into the background. It is aggressively engineered to add fewer than 2 milliseconds of latency per execution.
+
+However, a shim architecture carries an inherent, cumulative trade-off. If you use Scrim to manage a high-frequency compiler (like `gcc` or `rustc`) that a build tool might invoke 10,000 times during compilation, that tiny 2ms overhead will still add 20 seconds to your build time. While noticeable, this is drastically better than the multiple minutes of overhead introduced by other, slower shim architectures. Because Scrim's overhead is so tightly constrained, it remains tolerable.
+
+The primary value of Scrim is providing seamless versioning and telemetry to end users, IDEs, agents, and less capable build systems. The overhead is worth it to get these abilities in a consistent manner across these disparate contexts. More capable build systems can (and should) manage their toolchains hermetically and provide their own telemetry.
+
 ## Development
 
 ### AI
