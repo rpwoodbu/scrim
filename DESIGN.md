@@ -40,7 +40,7 @@ Example `scrim.yaml`:
 telemetry: true # disabled (false) by default
 tools:
   node:
-    system_path: /usr/local/bin/node
+    system_path: /bin/node
   go:
     url: https://go.dev/dl/go1.21.5.linux-amd64.tar.gz
     sha256: 285c1f0624022839446d32
@@ -109,6 +109,13 @@ Scrim avoids heavy external logging crates. Instead, it uses a lightweight, inte
 - Use Bazel with `rules_rust` for building the project.
 - **Modular Build Files**: To maintain a clean architecture, avoid a single overarching `BUILD.bazel` file at the repository root. Prefer individual `BUILD.bazel` files distributed within each logical segment of the project.
 
+### CI/CD
+Releases are automated via GitHub Actions.
+- The pipeline triggers on pushes to version tags (e.g., `v*`).
+- It runs all tests, including unit, integration, and manual performance validation tests, ensuring regressions are not published.
+- It builds a statically linked Linux amd64 release binary using Bazel.
+- The binary is published as a GitHub Release artifact alongside the source code.
+
 ### Directory Layout
 The project enforces the following prescriptive layout:
 - `/src/`: Contains the core Rust source code and library logic.
@@ -149,3 +156,4 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
 - **Concurrency Safety**: Safely support simultaneous concurrent access, notably when fetching the tool.
 - **Native Fetching**: Replace external shell command dependencies (`curl`, `sha256sum`, `tar`, `unzip`) with native Rust crates to make the static binary truly self-contained.
 - **Configurable Telemetry**: Support configuring the telemetry behavior and output destination (rather than hardcoding `/tmp/scrim_telemetry.log`).
+- **Cross-Platform Releases**: Support for building and releasing binaries for other architectures and operating systems (e.g., ARM64, macOS).

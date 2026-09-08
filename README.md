@@ -22,7 +22,7 @@ Define a `scrim.yaml` at the root of your project:
 telemetry: true # disabled (false) by default
 tools:
   node:
-    system_path: /usr/local/bin/node
+    system_path: /bin/node
   go:
     url: https://go.dev/dl/go1.21.5.linux-amd64.tar.gz
     sha256: 285c1f0624022839446d32839446d32839446d32839446d32839446d32839446
@@ -34,18 +34,16 @@ tools:
 
 ## Installation & Setup
 
-1. Build the Scrim executable:
+1. Download the statically linked `scrim-linux-amd64` executable from the latest GitHub Release.
+2. Move the downloaded binary to a stable directory in your `PATH` (e.g., `/usr/local/bin`) and make it executable:
    ```bash
-   bazel build //:scrim
-   ```
-2. Copy the built `scrim` binary to a stable directory in your `PATH` (e.g., `~/.local/bin`):
-   ```bash
-   cp bazel-bin/src/scrim ~/.local/bin/scrim
+   sudo mv scrim-linux-amd64 /usr/local/bin/scrim
+   sudo chmod +x /usr/local/bin/scrim
    ```
 3. Create symlinks for the tools you want to wrap pointing to the stable `scrim` binary:
    ```bash
-   ln -s scrim ~/.local/bin/node
-   ln -s scrim ~/.local/bin/go
+   sudo ln -s scrim /usr/local/bin/node
+   sudo ln -s scrim /usr/local/bin/go
    ```
 4. Create a `scrim.yaml` in your project folder, and run your command normally:
    ```bash
@@ -60,7 +58,7 @@ This project is an experiment in AI-first development. Nearly every commit is AI
 
 ### Building
 ```bash
-bazel build //...
+bazel build //:scrim
 ```
 
 ### Running Tests
