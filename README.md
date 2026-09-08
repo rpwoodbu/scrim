@@ -55,17 +55,27 @@ Run `scrim help` to see administrative functions.
 
 ## Comparison to Alternatives
 
-There are many excellent tools in the ecosystem for managing environment variables and tool versions. However, Scrim is specifically designed to minimize configuration overhead, eliminate the need for shell hooks, fetch tools generically without plugins, and provide out-of-the-box telemetry for tool invocations.
+There are many excellent tools in the ecosystem for managing environment variables and tool versions (such as `direnv`, `asdf`, and `mise`). If you are a solo developer looking for a feature-rich local environment manager, `mise` is an outstanding choice.
 
-| Feature | Scrim | [`direnv`](https://direnv.net/) | [`asdf`](https://asdf-vm.com/) | [`mise`](https://mise.jdx.dev/) |
-| :--- | :---: | :---: | :---: | :---: |
-| **Version Management** | ✅ | ✅<br>*(via `$PATH`)* | ✅ | ✅ |
-| **Fetches Binaries** | ✅<br>*(Generic URLs)* | ❌ | ✅<br>*(via Plugins)* | ✅<br>*(via Plugins)* |
-| **On-Demand Fetching** | ✅ | ❌ | ❌ | ✅ |
-| **Zero Shell Hooks** | ✅ | ❌ | ❌<br>*(Often requires shims/hooks)* | ❌<br>*(Often requires shims/hooks)* |
-| **Invocation Telemetry** | ✅ | ❌ | ❌ | ❌ |
-| **Directory Nav. Overhead** | Zero | Low | Low | Low |
-| **Execution Overhead** | Very Low *(<2ms)* | Zero | [High *(~120ms)*](https://mac.install.guide/mise/mise-vs-asdf) | Low / Zero |
+However, Scrim is specifically designed to solve **enterprise fleet deployment** problems where traditional environment managers introduce friction. Scrim's unique value proposition is built on three pillars:
+
+1. **Invisible Fleet Deployment (System-Wide)**: Traditional workflows require developers to opt-in by modifying their shell profiles (e.g., `~/.bashrc`). While modern tools like `mise` *can* be configured by administrators for system-wide shim deployments, they are fundamentally designed as complex, user-level environment managers. Scrim is purpose-built for the fleet: it uses fast symlinks pointing to a compiled binary in a standard system path (like `/usr/local/bin`), meaning administrators can drop it across thousands of machines and it instantly works for all users in all shells with **zero user configuration**.
+2. **Declarative Generic Fetching**: Supporting a custom or proprietary tool historically required writing and hosting custom Bash plugins (as seen in `asdf`). While `mise` now supports declarative fetching via its `http` backend, Scrim treats it as the core primitive. You can securely distribute any tool by providing just a URL, a mandatory SHA256 hash, and the binary's path within the archive in `scrim.yaml`.
+3. **Enterprise Telemetry**: Scrim is built from the ground up to gather tool invocation telemetry. It safely `fork()`s a background reporting process on every execution without blocking the critical path, allowing organizations to track internal tool usage globally.
+
+| Feature | Scrim | [`direnv`](https://direnv.net/) | [`asdf`](https://asdf-vm.com/) | [`mise`](https://mise.jdx.dev/)<br>*(Shims Only)* | [`mise`](https://mise.jdx.dev/)<br>*(Shell Hooks)* |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Version Management** | ✅ | ✅<br>*(via `$PATH`)* | ✅ | ✅ | ✅ |
+| **Shell Env Var Management** | ❌ | ✅ | ❌ | ❌ | ✅ |
+| **Fetches Binaries** | ✅ | ❌ | ✅ | ✅ | ✅ |
+| **Works Without Plugins** | ✅ | N/A | ❌ | ✅ | ✅ |
+| **On-Demand Fetching** | ✅ | ❌ | ❌ | ✅ | ✅ |
+| **Works Without Shell Hooks** | ✅ | ❌ | ✅ | ✅ | ❌ |
+| **Uses Shims in `PATH`** | ✅<br>*(Symlink to Rust binary)* | ❌ | ✅<br>*(Bash script to Go binary)* | ✅<br>*(Symlink to Rust binary)* | ❌ |
+| **System-wide Multi-User Setup** | ✅ | ❌ | ✅ | ✅ | ❌ |
+| **Invocation Telemetry** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Directory Nav. Overhead** | Zero | Low | Zero | Zero | Low |
+| **Execution Overhead** | Very Low *(<2ms)* | Zero | Medium | Low | Zero |
 
 ## Development
 
