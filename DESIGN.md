@@ -88,7 +88,7 @@ When a command (e.g., `node`) is invoked, Scrim follows this resolution logic:
 3.  **Execution**:
     - If the resolved version is a **Local Path** (via `system_path`), execute it directly.
     - If the resolved version needs to be **Fetched**, check `~/.cache/scrim/tools/<sha256>/`. Caching purely by the `sha256` digest (omitting the tool name) maximizes cache hits when multiple repositories or templated aliases refer to the same payload.
-    - If missing, fetch it synchronously, verify the digest, extract the archive (if applicable), and then execute.
+    - If missing, fetch it synchronously, verify the digest, extract the archive (if applicable), and then execute. Fetching is implemented entirely using native Rust crates (`ureq`, `sha2`, `tar`, `flate2`, `zip`) to eliminate external shell command dependencies (`curl`, `sha256sum`, `tar`, `unzip`) and ensure Scrim is a truly self-contained binary.
 
 ### Execution
 To minimize overhead, Scrim will use `execve` (on Unix) to replace the current process with the target tool process. This ensures there is no "parent" Scrim process hanging around during tool execution.
@@ -154,7 +154,6 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
 - **Cache Override Support**: Support environment variable overrides (e.g., `SCRIM_CACHE_DIR`) to configure the cache directory dynamically.
 - **Home Directory Search Boundary**: Stop upward directory traversal for `scrim.yaml` at `$HOME` to prevent scanning system directories when outside of a repository.
 - **Concurrency Safety**: Safely support simultaneous concurrent access, notably when fetching the tool.
-- **Native Fetching**: Replace external shell command dependencies (`curl`, `sha256sum`, `tar`, `unzip`) with native Rust crates to make the static binary truly self-contained.
 - **Configurable Telemetry**: Support configuring the telemetry behavior and output destination (rather than hardcoding `/tmp/scrim_telemetry.log`).
 - **Cross-Platform Releases**: Support for building and releasing binaries for other architectures and operating systems (e.g., ARM64, macOS).
 - **Per-Platform Configuration**: Configuration needs to allow per-platform specification.

@@ -11,6 +11,11 @@ rust_library(
         "@crates//:serde_with",
         "@crates//:libc",
         "@crates//:chrono",
+        "@crates//:ureq",
+        "@crates//:sha2",
+        "@crates//:tar",
+        "@crates//:flate2",
+        "@crates//:zip",
     ],
 )
 

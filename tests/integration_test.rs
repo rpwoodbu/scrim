@@ -433,6 +433,11 @@ tools:
         "Stdout did not contain expected network output: {:?}",
         stdout
     );
+    assert!(
+        stderr.contains("[Scrim] Downloading demotool..."),
+        "Stderr did not contain downloading UX message. Stderr: {:?}",
+        stderr
+    );
 
     // Wait for the server thread to finish cleanly
     server_thread.join().expect("HTTP mock server thread panicked");

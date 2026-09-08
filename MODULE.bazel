@@ -33,6 +33,26 @@ crate.spec(
     version = "3.8",
 )
 crate.spec(
+    package = "ureq",
+    version = "3",
+)
+crate.spec(
+    package = "zip",
+    version = "8",
+)
+crate.spec(
+    package = "sha2",
+    version = "0.10",
+)
+crate.spec(
+    package = "tar",
+    version = "0.4",
+)
+crate.spec(
+    package = "flate2",
+    version = "1.0",
+)
+crate.spec(
     package = "libc",
     version = "0.2",
 )

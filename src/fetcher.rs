@@ -1,6 +1,10 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::fs;
+use std::fs::{self, File};
+use std::io::{self};
+use sha2::{Sha256, Digest};
+use flate2::read::GzDecoder;
+use tar::Archive;
+use zip::ZipArchive;
 
 pub fn fetch_tool(tool_name: &str, url: &str, sha256: &str, archive_path: Option<&str>) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let home = std::env::var("HOME")?;
@@ -32,31 +36,31 @@ pub fn fetch_tool(tool_name: &str, url: &str, sha256: &str, archive_path: Option
         cache_dir.join(tool_name)
     };
 
-    // Download with curl
-    let status = Command::new("curl")
-        .arg("-f")
-        .arg("-L")
-        .arg("-o")
-        .arg(&download_path)
-        .arg(url)
-        .status()?;
-
-    if !status.success() {
-        return Err("Failed to download tool".into());
+    if let Some(local_path) = url.strip_prefix("file://") {
+        if !Path::new(local_path).exists() {
+            return Err(format!("Failed to download tool: local file {} does not exist", local_path).into());
+        }
+        fs::copy(local_path, &download_path)?;
+    } else {
+        crate::scrim_progress!("Downloading {}...", tool_name);
+        let response = match ureq::get(url).call() {
+            Ok(resp) => {
+                if !resp.status().is_success() {
+                    return Err(format!("Failed to download tool: HTTP status {}", resp.status()).into());
+                }
+                resp
+            },
+            Err(e) => return Err(format!("Failed to download tool: {}", e).into()),
+        };
+        let mut reader = response.into_body().into_reader();
+        let mut file = File::create(&download_path)?;
+        io::copy(&mut reader, &mut file)?;
     }
 
-    // Verify SHA256 using sha256sum
-    let sha256_output = Command::new("sha256sum")
-        .arg(&download_path)
-        .output()?;
-
-    if !sha256_output.status.success() {
-        let _ = fs::remove_file(&download_path);
-        return Err("Failed to compute SHA256".into());
-    }
-
-    let sha256_str = String::from_utf8_lossy(&sha256_output.stdout);
-    let computed_sha256 = sha256_str.split_whitespace().next().unwrap_or("");
+    let mut file = File::open(&download_path)?;
+    let mut hasher = Sha256::new();
+    io::copy(&mut file, &mut hasher)?;
+    let computed_sha256 = format!("{:x}", hasher.finalize());
 
     if computed_sha256 != sha256 {
         let err_msg = format!("SHA256 verification failed for {}.\nExpected: {}\nActual:   {}", tool_name, sha256, computed_sha256);
@@ -67,26 +71,25 @@ pub fn fetch_tool(tool_name: &str, url: &str, sha256: &str, archive_path: Option
     if is_archive {
         crate::scrim_progress!("Unpacking {} archive...", tool_name);
         if is_tar_gz {
-            let status = Command::new("tar")
-                .arg("-xzf")
-                .arg(&download_path)
-                .arg("-C")
-                .arg(&cache_dir)
-                .status()?;
-            if !status.success() {
+            let tar_gz = File::open(&download_path)?;
+            let tar = GzDecoder::new(tar_gz);
+            let mut archive = Archive::new(tar);
+            if let Err(e) = archive.unpack(&cache_dir) {
                 let _ = fs::remove_file(&download_path);
-                return Err("Failed to extract tar.gz archive".into());
+                return Err(format!("Failed to extract tar.gz archive: {}", e).into());
             }
         } else if is_zip {
-            let status = Command::new("unzip")
-                .arg("-q")
-                .arg(&download_path)
-                .arg("-d")
-                .arg(&cache_dir)
-                .status()?;
-            if !status.success() {
+            let zip_file = File::open(&download_path)?;
+            let mut archive = match ZipArchive::new(zip_file) {
+                Ok(a) => a,
+                Err(e) => {
+                    let _ = fs::remove_file(&download_path);
+                    return Err(format!("Failed to open zip archive: {}", e).into());
+                }
+            };
+            if let Err(e) = archive.extract(&cache_dir) {
                 let _ = fs::remove_file(&download_path);
-                return Err("Failed to extract zip archive".into());
+                return Err(format!("Failed to extract zip archive: {}", e).into());
             }
         }
         let _ = fs::remove_file(&download_path);
@@ -123,12 +126,10 @@ mod tests {
         fs::write(&mock_src, "echo 'hello'").unwrap();
 
         // Compute sha256
-        let sha256_output = Command::new("sha256sum")
-            .arg(&mock_src)
-            .output()
-            .unwrap();
-        let sha256_str = String::from_utf8(sha256_output.stdout).unwrap();
-        let sha256 = sha256_str.split_whitespace().next().unwrap().to_string();
+        let mut file = fs::File::open(&mock_src).unwrap();
+        let mut hasher = Sha256::new();
+        std::io::copy(&mut file, &mut hasher).unwrap();
+        let sha256 = format!("{:x}", hasher.finalize());
 
         // 2. Set temporary HOME environment variable to isolate the cache
         let fake_home = temp_path.join("fake_home");
@@ -174,12 +175,10 @@ mod tests {
         fs::write(&mock_src, "echo 'hello'").unwrap();
 
         // Compute actual sha256 to verify error message contents
-        let sha256_output = Command::new("sha256sum")
-            .arg(&mock_src)
-            .output()
-            .unwrap();
-        let sha256_str = String::from_utf8(sha256_output.stdout).unwrap();
-        let actual_sha256 = sha256_str.split_whitespace().next().unwrap().to_string();
+        let mut file = fs::File::open(&mock_src).unwrap();
+        let mut hasher = Sha256::new();
+        std::io::copy(&mut file, &mut hasher).unwrap();
+        let actual_sha256 = format!("{:x}", hasher.finalize());
 
         let fake_home = temp_path.join("fake_home");
         fs::create_dir_all(&fake_home).unwrap();
@@ -213,7 +212,7 @@ mod tests {
         let original_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", &fake_home);
 
-        // A non-existent file path will cause `curl -f` to fail
+        // A non-existent file path will cause a local file fetch to fail
         let file_url = "file:///tmp/this_file_does_not_exist_scrim_test_12345";
         let result = fetch_tool("my_test_tool", file_url, "any_sha256", None);
 
@@ -225,7 +224,67 @@ mod tests {
 
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
-        assert_eq!(err_msg, "Failed to download tool");
+        assert!(err_msg.contains("Failed to download tool"));
+        assert!(err_msg.contains("does not exist"));
+    }
+
+    #[test]
+    fn test_fetch_tool_http_404_failure() {
+        let temp = tempdir().unwrap();
+        let fake_home = temp.path().join("fake_home");
+        fs::create_dir_all(&fake_home).unwrap();
+        let original_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &fake_home);
+
+        // Start a mock HTTP server returning 404
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                use std::io::{Read, Write};
+                let mut buf = [0; 1024];
+                let _ = stream.read(&mut buf);
+                let response = "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found";
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        let url = format!("http://127.0.0.1:{}/not_found", port);
+        let result = fetch_tool("my_test_tool", &url, "any_sha256", None);
+
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+
+        assert!(result.is_err());
+        let err_msg = result.err().unwrap().to_string();
+        assert!(err_msg.contains("404"), "Expected HTTP 404 error, got: {}", err_msg);
+    }
+
+    #[test]
+    fn test_fetch_tool_network_error() {
+        let temp = tempdir().unwrap();
+        let fake_home = temp.path().join("fake_home");
+        fs::create_dir_all(&fake_home).unwrap();
+        let original_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &fake_home);
+
+        // Use a port that is definitely not listening to force a connection error
+        let url = "http://127.0.0.1:1";
+        let result = fetch_tool("my_test_tool", url, "any_sha256", None);
+
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+
+        assert!(result.is_err());
+        let err_msg = result.err().unwrap().to_string();
+        assert!(err_msg.contains("Failed to download tool:"), "Got: {}", err_msg);
+        assert!(!err_msg.ends_with("Failed to download tool"), "Underlying error was swallowed");
     }
 
     #[test]
@@ -239,23 +298,17 @@ mod tests {
         fs::write(mock_src_dir.join("bin").join("mytool"), "echo 'hello archive'").unwrap();
         
         let tar_gz_path = temp_path.join("mytool.tar.gz");
-        let status = Command::new("tar")
-            .arg("-czf")
-            .arg(&tar_gz_path)
-            .arg("-C")
-            .arg(&mock_src_dir)
-            .arg(".")
-            .status()
-            .unwrap();
-        assert!(status.success());
+        let tar_gz = fs::File::create(&tar_gz_path).unwrap();
+        let enc = flate2::write::GzEncoder::new(tar_gz, flate2::Compression::default());
+        let mut builder = tar::Builder::new(enc);
+        builder.append_dir_all(".", &mock_src_dir).unwrap();
+        builder.into_inner().unwrap().finish().unwrap();
 
         // Compute sha256 of the archive
-        let sha256_output = Command::new("sha256sum")
-            .arg(&tar_gz_path)
-            .output()
-            .unwrap();
-        let sha256_str = String::from_utf8(sha256_output.stdout).unwrap();
-        let sha256 = sha256_str.split_whitespace().next().unwrap().to_string();
+        let mut file = fs::File::open(&tar_gz_path).unwrap();
+        let mut hasher = Sha256::new();
+        std::io::copy(&mut file, &mut hasher).unwrap();
+        let sha256 = format!("{:x}", hasher.finalize());
 
         let fake_home = temp_path.join("fake_home");
         fs::create_dir_all(&fake_home).unwrap();
@@ -276,6 +329,59 @@ mod tests {
         let target_path = result.unwrap();
         assert!(target_path.exists());
         assert!(target_path.to_str().unwrap().contains("fake_home/.cache/scrim/tools/"));
+        assert!(target_path.to_str().unwrap().ends_with("bin/mytool"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = fs::metadata(&target_path).unwrap();
+            let mode = metadata.permissions().mode();
+            assert_eq!(mode & 0o111, 0o111, "File is not executable!");
+        }
+    }
+
+    #[test]
+    fn test_fetch_tool_zip_success() {
+        let temp = tempdir().unwrap();
+        let temp_path = temp.path();
+
+        let zip_path = temp_path.join("mytool.zip");
+        let zip_file = fs::File::create(&zip_path).unwrap();
+        let mut zip = zip::ZipWriter::new(zip_file);
+        
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored)
+            .unix_permissions(0o755);
+            
+        zip.start_file("bin/", options.clone()).unwrap();
+        zip.start_file("bin/mytool", options).unwrap();
+        use std::io::Write;
+        zip.write_all(b"echo 'hello zip archive'").unwrap();
+        zip.finish().unwrap();
+
+        let mut file = fs::File::open(&zip_path).unwrap();
+        let mut hasher = Sha256::new();
+        std::io::copy(&mut file, &mut hasher).unwrap();
+        let sha256 = format!("{:x}", hasher.finalize());
+
+        let fake_home = temp_path.join("fake_home");
+        fs::create_dir_all(&fake_home).unwrap();
+
+        let original_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &fake_home);
+
+        let file_url = format!("file://{}", zip_path.to_str().unwrap());
+        let result = fetch_tool("my_test_tool", &file_url, &sha256, Some("bin/mytool"));
+
+        if let Some(home) = original_home {
+            std::env::set_var("HOME", home);
+        } else {
+            std::env::remove_var("HOME");
+        }
+
+        assert!(result.is_ok());
+        let target_path = result.unwrap();
+        assert!(target_path.exists());
         assert!(target_path.to_str().unwrap().ends_with("bin/mytool"));
 
         #[cfg(unix)]
