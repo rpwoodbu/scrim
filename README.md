@@ -14,9 +14,20 @@
   - **URL Fetching & Caching:** Dynamically downloads a tool from a specified URL via `curl`, validates its integrity using `sha256sum`, unpacks archives automatically (if configured with `archive_path`), and caches it in `~/.cache/scrim/` for instant subsequent executions. Tools can also inherit fetch properties from other tools using `template`.
 - **Non-Blocking Telemetry:** Fork-based telemetry runs execution reporting in a background child process, ensuring tool invocation latency remains completely unaffected.
 
-## Configuration (`scrim.yaml`)
+## Installation
 
-Define a `scrim.yaml` at the root of your project:
+1. Download the executable (e.g., `scrim-linux-amd64`) from the latest GitHub Release.
+2. Install the downloaded binary to a stable directory in your `PATH` (e.g., `/usr/local/bin`):
+   ```bash
+   sudo install -m 755 scrim-linux-amd64 /usr/local/bin/scrim
+   ```
+3. Create `scrim.yaml` file(s) (keep reading).
+
+## Configuration
+
+Scrim is configured by `scrim.yaml` that may be placed in your project, in your home directory (`~/.config/scrim/`), and/or at the system level (`/etc/scrim/`). They layer, producing a composite configuration whereby more local elements take precedence. Scrim traverses up from the current working directory to discover `scrim.yaml` files, stopping at the repository boundary. This allows a system-wide version of a tool to be defined, but with user, project, and even project subdirectory overrides.
+
+The only other requirement is that each tool needs to have a link (symbolic or hard) in the path which points to the installed `scrim` binary. (This is similar in principle to `busybox`.) This can be defined at the system level, although the configuration is resolved based in your current working directory.
 
 ```yaml
 telemetry: true # disabled (false) by default
@@ -32,23 +43,16 @@ tools:
     archive_path: go/bin/gofmt
 ```
 
-## Installation & Setup
+## Usage
 
-1. Download the statically linked `scrim-linux-amd64` executable from the latest GitHub Release.
-2. Move the downloaded binary to a stable directory in your `PATH` (e.g., `/usr/local/bin`) and make it executable:
-   ```bash
-   sudo mv scrim-linux-amd64 /usr/local/bin/scrim
-   sudo chmod +x /usr/local/bin/scrim
-   ```
-3. Create symlinks for the tools you want to wrap pointing to the stable `scrim` binary:
-   ```bash
-   sudo ln -s scrim /usr/local/bin/node
-   sudo ln -s scrim /usr/local/bin/go
-   ```
-4. Create a `scrim.yaml` in your project folder, and run your command normally:
-   ```bash
-   node app.js
-   ```
+Run your command(s) normally; e.g.:
+```bash
+$ go version
+# ... downloading and unpacking only if needed ...
+go version go1.21.5 linux/amd64
+```
+
+Run `scrim help` to see administrative functions.
 
 ## Development
 
