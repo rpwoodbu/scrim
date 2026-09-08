@@ -5,8 +5,6 @@
 > **Origin of the Name:**  
 > The name *Scrim* refers to the thin, translucent fabric used in theater to create lighting effects or hide/reveal elements on stage. It represents a "thin" proxy that stays completely out of sight until needed.
 
----
-
 ## Key Features
 
 - **Zero-Hook Integration:** Simply link Scrim to any tool name in your `PATH` (e.g., `node`, `go`). Scrim handles the rest based on your current directory.
@@ -15,8 +13,6 @@
   - **Local Path:** Instantly routes to a pre-installed local executable via `system_path`.
   - **URL Fetching & Caching:** Dynamically downloads a tool from a specified URL via `curl`, validates its integrity using `sha256sum`, unpacks archives automatically (if configured with `archive_path`), and caches it in `~/.cache/scrim/` for instant subsequent executions. Tools can also inherit fetch properties from other tools using `template`.
 - **Non-Blocking Telemetry:** Fork-based telemetry runs execution reporting in a background child process, ensuring tool invocation latency remains completely unaffected.
-
----
 
 ## Configuration (`scrim.yaml`)
 
@@ -35,8 +31,6 @@ tools:
     template: go
     archive_path: go/bin/gofmt
 ```
-
----
 
 ## Installation & Setup
 
@@ -57,8 +51,6 @@ tools:
    ```bash
    node app.js
    ```
-
----
 
 ## Development
 
