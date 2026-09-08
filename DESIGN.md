@@ -157,3 +157,4 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
 - **Native Fetching**: Replace external shell command dependencies (`curl`, `sha256sum`, `tar`, `unzip`) with native Rust crates to make the static binary truly self-contained.
 - **Configurable Telemetry**: Support configuring the telemetry behavior and output destination (rather than hardcoding `/tmp/scrim_telemetry.log`).
 - **Cross-Platform Releases**: Support for building and releasing binaries for other architectures and operating systems (e.g., ARM64, macOS).
+- **Per-Platform Configuration**: Configuration needs to allow per-platform specification.
