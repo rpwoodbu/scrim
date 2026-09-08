@@ -62,6 +62,10 @@ tools:
 
 ## Development
 
+### AI
+
+This project is an experiment in AI-first development. Nearly every commit is AI-generated. However, the process is very design- and test-driven. Human review is focused on the design and tests, less so on the implementation. Read [DESIGN.md](DESIGN.md), especially the Core Design Principles.
+
 ### Building
 ```bash
 bazel build //...
