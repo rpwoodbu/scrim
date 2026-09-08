@@ -3,7 +3,7 @@ use scrim_lib::{config, fetcher, resolver, telemetry};
 use std::env;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 fn main() {
     let args: Vec<std::ffi::OsString> = env::args_os().collect();
@@ -25,6 +25,10 @@ fn main() {
     }
 }
 
+fn get_home_dir() -> Option<PathBuf> {
+    env::var_os("HOME").map(PathBuf::from)
+}
+
 fn handle_management_command(args: &[std::ffi::OsString]) {
     match args.get(1).and_then(|s| s.to_str()) {
         Some("help") => {
@@ -38,7 +42,8 @@ fn handle_management_command(args: &[std::ffi::OsString]) {
         Some("version") => println!("scrim 0.1.0"),
         Some("config") => {
             let cwd = env::current_dir().expect("Failed to get current directory");
-            let config = match config::load_config(&cwd) {
+            let home_dir = get_home_dir();
+            let config = match config::load_config(&cwd, home_dir.as_deref()) {
                 Ok(c) => c,
                 Err(e) => {
                     scrim_lib::scrim_error!("Failed to load configuration: {}", e);
@@ -59,7 +64,8 @@ fn handle_management_command(args: &[std::ffi::OsString]) {
 
 fn proxy_command(program_name: &str, args: &[std::ffi::OsString]) {
     let cwd = env::current_dir().expect("Failed to get current directory");
-    let config = match config::load_config(&cwd) {
+    let home_dir = get_home_dir();
+    let config = match config::load_config(&cwd, home_dir.as_deref()) {
         Ok(c) => c,
         Err(e) => {
             scrim_lib::scrim_error!("Failed to load configuration: {}", e);
@@ -74,7 +80,9 @@ fn proxy_command(program_name: &str, args: &[std::ffi::OsString]) {
             let target_path = match res {
                 resolver::Resolution::LocalPath(p) => p,
                 resolver::Resolution::Fetch { url, sha256, archive_path } => {
-                    match fetcher::fetch_tool(program_name, &url, &sha256, archive_path.as_deref()) {
+                    let tools_dir = home_dir.as_ref().map(|h| h.join(".cache/scrim/tools")).unwrap_or_else(|| PathBuf::from(".cache/scrim/tools"));
+                    let cache_dir = tools_dir.join(&sha256);
+                    match fetcher::fetch_tool(program_name, &url, &sha256, archive_path.as_deref(), &cache_dir) {
                         Ok(p) => p,
                         Err(e) => {
                             scrim_lib::scrim_error!("Failed to fetch tool '{}': {}", program_name, e);

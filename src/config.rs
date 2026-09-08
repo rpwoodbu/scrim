@@ -37,7 +37,7 @@ impl Config {
     }
 }
 
-pub fn load_config(start_path: &Path) -> Result<Config, Box<dyn std::error::Error>> {
+pub fn load_config(start_path: &Path, home_dir: Option<&Path>) -> Result<Config, Box<dyn std::error::Error>> {
     let mut config = Config::default();
 
     // 1. System-Level Configuration
@@ -48,8 +48,8 @@ pub fn load_config(start_path: &Path) -> Result<Config, Box<dyn std::error::Erro
     }
 
     // 2. User-Level Configuration
-    if let Ok(home) = std::env::var("HOME") {
-        let user_config_path = Path::new(&home).join(".config/scrim/scrim.yaml");
+    if let Some(home) = home_dir {
+        let user_config_path = Path::new(home).join(".config/scrim/scrim.yaml");
         if user_config_path.exists() {
             let c = read_config(&user_config_path)?;
             config = config.merge(c);
@@ -100,20 +100,16 @@ mod tests {
     #[test]
     fn test_load_config_in_current_dir() {
         let dir = tempdir().unwrap();
-        // Override HOME so it doesn't pick up dev env configs
-        std::env::set_var("HOME", dir.path());
-        
         let config_path = dir.path().join("scrim.yaml");
         fs::write(&config_path, "{}").unwrap();
 
-        let config = load_config(dir.path()).unwrap();
+        let config = load_config(dir.path(), Some(dir.path())).unwrap();
         assert!(config.tools.is_empty());
     }
 
     #[test]
     fn test_load_config_layering() {
         let root = tempdir().unwrap();
-        std::env::set_var("HOME", root.path());
 
         // Parent config
         let parent_config_path = root.path().join("scrim.yaml");
@@ -126,7 +122,7 @@ mod tests {
         let child_config_path = child.join("scrim.yaml");
         fs::write(&child_config_path, "telemetry: true\ntools:\n  foo: { system_path: '/bin/child_foo' }").unwrap();
 
-        let config = load_config(&child).unwrap();
+        let config = load_config(&child, Some(root.path())).unwrap();
         
         // Child wins for telemetry
         assert_eq!(config.telemetry, Some(true));
@@ -141,16 +137,14 @@ mod tests {
     #[test]
     fn test_load_config_not_found() {
         let dir = tempdir().unwrap();
-        std::env::set_var("HOME", dir.path());
         
-        let config = load_config(dir.path()).unwrap();
+        let config = load_config(dir.path(), Some(dir.path())).unwrap();
         assert!(config.tools.is_empty());
     }
 
     #[test]
     fn test_load_config_stops_at_git() {
         let root = tempdir().unwrap();
-        std::env::set_var("HOME", root.path());
         
         // Config outside repo
         let config_path = root.path().join("scrim.yaml");
@@ -164,7 +158,7 @@ mod tests {
         fs::create_dir_all(&child).unwrap();
 
         // Should return empty because it stops at .git and doesn't see outside config
-        let config = load_config(&child).unwrap();
+        let config = load_config(&child, Some(root.path())).unwrap();
         assert!(!config.tools.contains_key("outside"));
     }
 

@@ -25,7 +25,6 @@ fn find_scrim_bin() -> PathBuf {
 
 fn bench_config_resolution(c: &mut Criterion) {
     let dir = tempdir().unwrap();
-    std::env::set_var("HOME", dir.path());
     let config_path = dir.path().join("scrim.yaml");
     fs::write(&config_path, "{}").unwrap();
 
@@ -33,7 +32,7 @@ fn bench_config_resolution(c: &mut Criterion) {
     fs::create_dir_all(&child).unwrap();
 
     c.bench_function("config_resolution", |b| {
-        b.iter(|| config::load_config(black_box(&child)))
+        b.iter(|| config::load_config(black_box(&child), Some(dir.path())))
     });
 }
 

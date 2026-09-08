@@ -19,6 +19,7 @@
 - **Reliability**: Failures in telemetry or other auxiliary tasks must never block or prevent tool execution.
 - **YAGNI (You Aren't Gonna Need It)**: Favor simplicity and minimal configuration. Avoid preemptive abstractions until they are strictly required.
 - **DRY (Don't Repeat Yourself)**: Avoid duplicating logic or configuration; centralize shared behavior.
+- **No Global State**: Library modules MUST NOT read or mutate process-global state (e.g., environment variables). All global state MUST be captured at the application entrypoint and passed to internal logic via explicit parameters to ensure modularity, thread safety, and testability.
 
 ## UX
 

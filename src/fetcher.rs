@@ -23,10 +23,8 @@ impl<W: Write, D: Digest> Write for HashingWriter<W, D> {
     }
 }
 
-pub fn fetch_tool(tool_name: &str, url: &str, sha256: &str, archive_path: Option<&str>) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let home = std::env::var("HOME")?;
-    let tools_dir = Path::new(&home).join(".cache/scrim/tools");
-    let cache_dir = tools_dir.join(sha256);
+pub fn fetch_tool(tool_name: &str, url: &str, sha256: &str, archive_path: Option<&str>, cache_dir: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let tools_dir = cache_dir.parent().unwrap_or(cache_dir);
     
     // Ignore query parameters when detecting archive types
     let url_path = url.split('?').next().unwrap_or(url);
@@ -52,10 +50,10 @@ pub fn fetch_tool(tool_name: &str, url: &str, sha256: &str, archive_path: Option
         return Ok(target_path);
     }
 
-    fs::create_dir_all(&tools_dir)?;
+    fs::create_dir_all(tools_dir)?;
 
     // Download to a temporary file in the tools directory
-    let mut temp_file = tempfile::NamedTempFile::new_in(&tools_dir)?;
+    let mut temp_file = tempfile::NamedTempFile::new_in(tools_dir)?;
     let mut hw = HashingWriter { writer: &mut temp_file, hasher: Sha256::new() };
 
     if let Some(local_path) = url.strip_prefix("file://") {
@@ -91,7 +89,7 @@ pub fn fetch_tool(tool_name: &str, url: &str, sha256: &str, archive_path: Option
         crate::scrim_progress!("Unpacking {} archive...", tool_name);
         
         // Extract to a TempDir first to ensure atomicity
-        let unpack_dir = tempfile::TempDir::new_in(&tools_dir)?;
+        let unpack_dir = tempfile::TempDir::new_in(tools_dir)?;
         
         if is_tar_gz {
             let tar_gz = temp_file.reopen()?;
@@ -191,42 +189,26 @@ mod tests {
         let temp = tempdir().unwrap();
         let temp_path = temp.path();
 
-        // 1. Create a local mock source tool
         let mock_src = temp_path.join("mock_src");
         fs::write(&mock_src, "echo 'hello'").unwrap();
 
-        // Compute sha256
         let mut file = fs::File::open(&mock_src).unwrap();
         let mut hasher = Sha256::new();
         std::io::copy(&mut file, &mut hasher).unwrap();
         let sha256 = format!("{:x}", hasher.finalize());
 
-        // 2. Set temporary HOME environment variable to isolate the cache
         let fake_home = temp_path.join("fake_home");
-        fs::create_dir_all(&fake_home).unwrap();
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(&sha256);
 
-        let original_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &fake_home);
-
-        // 3. Fetch the tool using file:// URL (which curl processes identically)
         let file_url = format!("file://{}", mock_src.to_str().unwrap());
-        let result = fetch_tool("my_test_tool", &file_url, &sha256, None);
+        let result = fetch_tool("my_test_tool", &file_url, &sha256, None, &cache_dir);
 
-        // Restore original HOME immediately to prevent side-effects on other tests
-        if let Some(home) = original_home {
-            std::env::set_var("HOME", home);
-        } else {
-            std::env::remove_var("HOME");
-        }
-
-        // 4. Assertions
         assert!(result.is_ok());
         let target_path = result.unwrap();
         assert!(target_path.exists());
         assert!(target_path.to_str().unwrap().contains("fake_home/.cache/scrim/tools/"));
         assert!(target_path.to_str().unwrap().ends_with("my_test_tool"));
 
-        // Verify it was marked executable
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -244,28 +226,17 @@ mod tests {
         let mock_src = temp_path.join("mock_src");
         fs::write(&mock_src, "echo 'hello'").unwrap();
 
-        // Compute actual sha256 to verify error message contents
         let mut file = fs::File::open(&mock_src).unwrap();
         let mut hasher = Sha256::new();
         std::io::copy(&mut file, &mut hasher).unwrap();
         let actual_sha256 = format!("{:x}", hasher.finalize());
 
         let fake_home = temp_path.join("fake_home");
-        fs::create_dir_all(&fake_home).unwrap();
-
-        let original_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &fake_home);
+        let cache_dir = fake_home.join(".cache/scrim/tools").join("incorrect_sha_hash");
 
         let file_url = format!("file://{}", mock_src.to_str().unwrap());
-        let result = fetch_tool("my_test_tool", &file_url, "incorrect_sha_hash", None);
+        let result = fetch_tool("my_test_tool", &file_url, "incorrect_sha_hash", None, &cache_dir);
 
-        if let Some(home) = original_home {
-            std::env::set_var("HOME", home);
-        } else {
-            std::env::remove_var("HOME");
-        }
-
-        // Assertions: should fail with SHA verification error
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
         assert!(err_msg.contains("SHA256 verification failed for my_test_tool."));
@@ -277,20 +248,10 @@ mod tests {
     fn test_fetch_tool_download_failure() {
         let temp = tempdir().unwrap();
         let fake_home = temp.path().join("fake_home");
-        fs::create_dir_all(&fake_home).unwrap();
+        let cache_dir = fake_home.join(".cache/scrim/tools").join("any_sha256");
 
-        let original_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &fake_home);
-
-        // A non-existent file path will cause a local file fetch to fail
         let file_url = "file:///tmp/this_file_does_not_exist_scrim_test_12345";
-        let result = fetch_tool("my_test_tool", file_url, "any_sha256", None);
-
-        if let Some(home) = original_home {
-            std::env::set_var("HOME", home);
-        } else {
-            std::env::remove_var("HOME");
-        }
+        let result = fetch_tool("my_test_tool", file_url, "any_sha256", None, &cache_dir);
 
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
@@ -302,11 +263,8 @@ mod tests {
     fn test_fetch_tool_http_404_failure() {
         let temp = tempdir().unwrap();
         let fake_home = temp.path().join("fake_home");
-        fs::create_dir_all(&fake_home).unwrap();
-        let original_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &fake_home);
+        let cache_dir = fake_home.join(".cache/scrim/tools").join("any_sha256");
 
-        // Start a mock HTTP server returning 404
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         std::thread::spawn(move || {
@@ -320,13 +278,7 @@ mod tests {
         });
 
         let url = format!("http://127.0.0.1:{}/not_found", port);
-        let result = fetch_tool("my_test_tool", &url, "any_sha256", None);
-
-        if let Some(home) = original_home {
-            std::env::set_var("HOME", home);
-        } else {
-            std::env::remove_var("HOME");
-        }
+        let result = fetch_tool("my_test_tool", &url, "any_sha256", None, &cache_dir);
 
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
@@ -337,19 +289,10 @@ mod tests {
     fn test_fetch_tool_network_error() {
         let temp = tempdir().unwrap();
         let fake_home = temp.path().join("fake_home");
-        fs::create_dir_all(&fake_home).unwrap();
-        let original_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &fake_home);
+        let cache_dir = fake_home.join(".cache/scrim/tools").join("any_sha256");
 
-        // Use a port that is definitely not listening to force a connection error
         let url = "http://127.0.0.1:1";
-        let result = fetch_tool("my_test_tool", url, "any_sha256", None);
-
-        if let Some(home) = original_home {
-            std::env::set_var("HOME", home);
-        } else {
-            std::env::remove_var("HOME");
-        }
+        let result = fetch_tool("my_test_tool", url, "any_sha256", None, &cache_dir);
 
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
@@ -362,7 +305,6 @@ mod tests {
         let temp = tempdir().unwrap();
         let temp_path = temp.path();
 
-        // Create a mock binary structure inside an archive
         let mock_src_dir = temp_path.join("mock_src_dir");
         fs::create_dir_all(mock_src_dir.join("bin")).unwrap();
         fs::write(mock_src_dir.join("bin").join("mytool"), "echo 'hello archive'").unwrap();
@@ -374,26 +316,16 @@ mod tests {
         builder.append_dir_all(".", &mock_src_dir).unwrap();
         builder.into_inner().unwrap().finish().unwrap();
 
-        // Compute sha256 of the archive
         let mut file = fs::File::open(&tar_gz_path).unwrap();
         let mut hasher = Sha256::new();
         std::io::copy(&mut file, &mut hasher).unwrap();
         let sha256 = format!("{:x}", hasher.finalize());
 
         let fake_home = temp_path.join("fake_home");
-        fs::create_dir_all(&fake_home).unwrap();
-
-        let original_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &fake_home);
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(&sha256);
 
         let file_url = format!("file://{}", tar_gz_path.to_str().unwrap());
-        let result = fetch_tool("my_test_tool", &file_url, &sha256, Some("bin/mytool"));
-
-        if let Some(home) = original_home {
-            std::env::set_var("HOME", home);
-        } else {
-            std::env::remove_var("HOME");
-        }
+        let result = fetch_tool("my_test_tool", &file_url, &sha256, Some("bin/mytool"), &cache_dir);
 
         assert!(result.is_ok());
         let target_path = result.unwrap();
@@ -435,19 +367,10 @@ mod tests {
         let sha256 = format!("{:x}", hasher.finalize());
 
         let fake_home = temp_path.join("fake_home");
-        fs::create_dir_all(&fake_home).unwrap();
-
-        let original_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &fake_home);
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(&sha256);
 
         let file_url = format!("file://{}", zip_path.to_str().unwrap());
-        let result = fetch_tool("my_test_tool", &file_url, &sha256, Some("bin/mytool"));
-
-        if let Some(home) = original_home {
-            std::env::set_var("HOME", home);
-        } else {
-            std::env::remove_var("HOME");
-        }
+        let result = fetch_tool("my_test_tool", &file_url, &sha256, Some("bin/mytool"), &cache_dir);
 
         assert!(result.is_ok());
         let target_path = result.unwrap();
@@ -467,27 +390,19 @@ mod tests {
     fn test_fetch_tool_archive_path_validation() {
         let temp = tempdir().unwrap();
         let fake_home = temp.path().join("fake_home");
-        fs::create_dir_all(&fake_home).unwrap();
-        let original_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &fake_home);
+        let cache_dir = fake_home.join(".cache/scrim/tools").join("any_sha");
 
         let url = "https://example.com/tool.tar.gz";
 
         // Test absolute path
-        let res_absolute = fetch_tool("my_tool", url, "any_sha", Some("/absolute/path"));
+        let res_absolute = fetch_tool("my_tool", url, "any_sha", Some("/absolute/path"), &cache_dir);
         assert!(res_absolute.is_err());
         assert!(res_absolute.err().unwrap().to_string().contains("must be a relative path"));
 
         // Test '..' traversal
-        let res_traversal = fetch_tool("my_tool", url, "any_sha", Some("bin/../secret"));
+        let res_traversal = fetch_tool("my_tool", url, "any_sha", Some("bin/../secret"), &cache_dir);
         assert!(res_traversal.is_err());
         assert!(res_traversal.err().unwrap().to_string().contains("without '..'"));
-
-        if let Some(home) = original_home {
-            std::env::set_var("HOME", home);
-        } else {
-            std::env::remove_var("HOME");
-        }
     }
 
     #[test]
@@ -503,7 +418,6 @@ mod tests {
             .compression_method(zip::CompressionMethod::Stored)
             .unix_permissions(0o755);
             
-        // Use tool_name "default_tool" in the root of the archive
         zip.start_file("default_tool", options).unwrap();
         use std::io::Write;
         zip.write_all(b"echo 'default archive'").unwrap();
@@ -515,19 +429,10 @@ mod tests {
         let sha256 = format!("{:x}", hasher.finalize());
 
         let fake_home = temp_path.join("fake_home");
-        fs::create_dir_all(&fake_home).unwrap();
-        let original_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &fake_home);
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(&sha256);
 
         let file_url = format!("file://{}", zip_path.to_str().unwrap());
-        // Pass archive_path = None, which should default to tool_name
-        let result = fetch_tool("default_tool", &file_url, &sha256, None);
-
-        if let Some(home) = original_home {
-            std::env::set_var("HOME", home);
-        } else {
-            std::env::remove_var("HOME");
-        }
+        let result = fetch_tool("default_tool", &file_url, &sha256, None, &cache_dir);
 
         assert!(result.is_ok());
         let target_path = result.unwrap();
@@ -541,7 +446,6 @@ mod tests {
         let temp = tempdir().unwrap();
         let temp_path = temp.path();
 
-        // Create an archive containing a symlink explicitly
         let tar_gz_path = temp_path.join("mytool.tar.gz");
         let tar_gz = fs::File::create(&tar_gz_path).unwrap();
         let enc = flate2::write::GzEncoder::new(tar_gz, flate2::Compression::default());
@@ -560,18 +464,10 @@ mod tests {
         let sha256 = format!("{:x}", hasher.finalize());
 
         let fake_home = temp_path.join("fake_home");
-        fs::create_dir_all(&fake_home).unwrap();
-        let original_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &fake_home);
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(&sha256);
 
         let file_url = format!("file://{}", tar_gz_path.to_str().unwrap());
-        let result = fetch_tool("mytool", &file_url, &sha256, None);
-
-        if let Some(home) = original_home {
-            std::env::set_var("HOME", home);
-        } else {
-            std::env::remove_var("HOME");
-        }
+        let result = fetch_tool("mytool", &file_url, &sha256, None, &cache_dir);
 
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
@@ -605,18 +501,10 @@ mod tests {
         });
 
         let fake_home = temp_path.join("fake_home");
-        fs::create_dir_all(&fake_home).unwrap();
-        let original_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &fake_home);
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(&sha256);
 
         let url = format!("http://127.0.0.1:{}/binary", port);
-        let result = fetch_tool("http_tool", &url, &sha256, None);
-
-        if let Some(home) = original_home {
-            std::env::set_var("HOME", home);
-        } else {
-            std::env::remove_var("HOME");
-        }
+        let result = fetch_tool("http_tool", &url, &sha256, None, &cache_dir);
 
         assert!(result.is_ok());
         let target_path = result.unwrap();
@@ -645,18 +533,10 @@ mod tests {
         let sha256 = format!("{:x}", Sha256::digest(fs::read(&tar_gz_path).unwrap()));
 
         let fake_home = temp_path.join("fake_home");
-        fs::create_dir_all(&fake_home).unwrap();
-        let original_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &fake_home);
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(&sha256);
 
         let file_url = format!("file://{}", tar_gz_path.to_str().unwrap());
-        let result = fetch_tool("mytool", &file_url, &sha256, Some("expected_binary"));
-
-        if let Some(home) = original_home {
-            std::env::set_var("HOME", home);
-        } else {
-            std::env::remove_var("HOME");
-        }
+        let result = fetch_tool("mytool", &file_url, &sha256, Some("expected_binary"), &cache_dir);
 
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
@@ -682,18 +562,10 @@ mod tests {
         let sha256 = format!("{:x}", Sha256::digest(fs::read(&tgz_path).unwrap()));
 
         let fake_home = temp_path.join("fake_home");
-        fs::create_dir_all(&fake_home).unwrap();
-        let original_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &fake_home);
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(&sha256);
 
         let file_url = format!("file://{}", tgz_path.to_str().unwrap());
-        let result = fetch_tool("mytool", &file_url, &sha256, None);
-
-        if let Some(home) = original_home {
-            std::env::set_var("HOME", home);
-        } else {
-            std::env::remove_var("HOME");
-        }
+        let result = fetch_tool("mytool", &file_url, &sha256, None, &cache_dir);
 
         assert!(result.is_ok());
         let target_path = result.unwrap();
@@ -712,18 +584,10 @@ mod tests {
         let sha256 = format!("{:x}", Sha256::digest(b"not a valid tar.gz file"));
 
         let fake_home = temp_path.join("fake_home");
-        fs::create_dir_all(&fake_home).unwrap();
-        let original_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &fake_home);
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(&sha256);
 
         let file_url = format!("file://{}", corrupt_path.to_str().unwrap());
-        let result = fetch_tool("corrupt_tool", &file_url, &sha256, None);
-
-        if let Some(home) = original_home {
-            std::env::set_var("HOME", home);
-        } else {
-            std::env::remove_var("HOME");
-        }
+        let result = fetch_tool("corrupt_tool", &file_url, &sha256, None, &cache_dir);
 
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
@@ -741,18 +605,10 @@ mod tests {
         let sha256 = format!("{:x}", Sha256::digest(b"not a valid zip file"));
 
         let fake_home = temp_path.join("fake_home");
-        fs::create_dir_all(&fake_home).unwrap();
-        let original_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &fake_home);
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(&sha256);
 
         let file_url = format!("file://{}", corrupt_path.to_str().unwrap());
-        let result = fetch_tool("corrupt_tool", &file_url, &sha256, None);
-
-        if let Some(home) = original_home {
-            std::env::set_var("HOME", home);
-        } else {
-            std::env::remove_var("HOME");
-        }
+        let result = fetch_tool("corrupt_tool", &file_url, &sha256, None, &cache_dir);
 
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
@@ -771,17 +627,7 @@ mod tests {
         let cached_bin = cache_dir.join("cached_tool");
         fs::write(&cached_bin, b"already cached").unwrap();
 
-        let original_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &fake_home);
-
-        // Fetch using invalid URL; fast path should return cached_bin before reaching network
-        let result = fetch_tool("cached_tool", "http://invalid.invalid/never_called", sha256, None);
-
-        if let Some(home) = original_home {
-            std::env::set_var("HOME", home);
-        } else {
-            std::env::remove_var("HOME");
-        }
+        let result = fetch_tool("cached_tool", "http://invalid.invalid/never_called", sha256, None, &cache_dir);
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), cached_bin);
