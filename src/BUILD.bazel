@@ -16,6 +16,7 @@ rust_library(
         "@crates//:tar",
         "@crates//:flate2",
         "@crates//:zip",
+        "@crates//:tempfile",
     ],
 )
 
