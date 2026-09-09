@@ -597,7 +597,7 @@ fn test_e2e_management_cli() {
         .output()
         .expect("Failed to run scrim version");
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("scrim 0.1.0"));
+    assert!(stdout.contains(&format!("scrim {}", scrim_lib::VERSION)));
 
     // 4. Run with 'config'
     let scrim_yaml = temp_path.join("scrim.yaml");

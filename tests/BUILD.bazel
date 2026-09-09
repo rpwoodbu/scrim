@@ -5,7 +5,10 @@ rust_test(
     srcs = ["integration_test.rs"],
     edition = "2021",
     data = ["//src:scrim"],
-    deps = ["@crates//:tempfile"],
+    deps = [
+        "//src:scrim_lib",
+        "@crates//:tempfile",
+    ],
 )
 
 rust_test(

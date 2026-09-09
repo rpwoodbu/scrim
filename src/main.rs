@@ -39,7 +39,7 @@ fn handle_management_command(args: &[std::ffi::OsString]) {
             println!("  version  Displays the version of Scrim.");
             println!("  config   Reports the resultant aggregated configuration after resolving all configuration layers.");
         }
-        Some("version") => println!("scrim 0.1.0"),
+        Some("version") => println!("scrim {}", scrim_lib::VERSION),
         Some("config") => {
             let cwd = env::current_dir().expect("Failed to get current directory");
             let home_dir = get_home_dir();
