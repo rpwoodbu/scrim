@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 #[serde_with::skip_serializing_none]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ToolConfig {
     pub system_path: Option<String>,

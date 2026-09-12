@@ -38,6 +38,7 @@ fn handle_management_command(args: &[std::ffi::OsString]) {
             println!("  help     Displays usage information and available commands.");
             println!("  version  Displays the version of Scrim.");
             println!("  config   Reports the resultant aggregated configuration after resolving all configuration layers.");
+            println!("  links    Updates links in a specified target directory for all defined tools.");
         }
         Some("version") => println!("scrim {}", scrim_lib::VERSION),
         Some("config") => {
@@ -56,6 +57,36 @@ fn handle_management_command(args: &[std::ffi::OsString]) {
                     scrim_lib::scrim_error!("Failed to serialize configuration: {}", e);
                     std::process::exit(1);
                 }
+            }
+        }
+        Some("links") => {
+            let dir_arg = match args.get(2) {
+                Some(arg) => Path::new(arg),
+                None => {
+                    scrim_lib::scrim_error!("directory argument required for links command");
+                    std::process::exit(1);
+                }
+            };
+            let scrim_exe = match env::current_exe() {
+                Ok(exe) => exe,
+                Err(e) => {
+                    scrim_lib::scrim_error!("Failed to resolve current executable path: {}", e);
+                    std::process::exit(1);
+                }
+            };
+            let cwd = env::current_dir().expect("Failed to get current directory");
+            let home_dir = get_home_dir();
+            let config = match config::load_config(&cwd, home_dir.as_deref()) {
+                Ok(c) => c,
+                Err(e) => {
+                    scrim_lib::scrim_error!("Failed to load configuration: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            if let Err(e) = scrim_lib::linker::create_links(dir_arg, &scrim_exe, &config) {
+                scrim_lib::scrim_error!("{}", e);
+                std::process::exit(1);
             }
         }
         _ => println!("Run 'scrim help' for usage."),

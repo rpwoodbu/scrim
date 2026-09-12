@@ -33,6 +33,22 @@ When invoked directly as `scrim` (i.e., `argv[0]` is `scrim`), Scrim provides a 
 - `help`: Displays usage information and available commands.
 - `version`: Displays the version of Scrim.
 - `config`: Reports the resultant aggregated configuration after resolving all configuration layers. Unspecified fields and empty collections are omitted from the output to reduce noise.
+- `links`: Updates links in a specified target directory for all defined tools to point to the `scrim` binary.
+
+#### Links Command (`scrim links <DIR>`)
+
+The `scrim links <DIR>` command creates or updates links in the specified directory `<DIR>` to point to the current `scrim` executable for all tools declared across resolved configuration layers.
+
+- **Arguments**: `<DIR>` (path to directory where links should be created/updated).
+- **Behavior**:
+  1. Resolves aggregated configuration across system, user, and workspace layers to get the set of defined tool names.
+  2. Resolves the executable path of the current `scrim` binary.
+  3. For each tool in the aggregated configuration, creates a symbolic link at `<DIR>/<tool_name>` pointing to the relative path of the `scrim` binary and logs progress (skipping links that already point to the correct target). If an existing file or symlink pointing elsewhere is present, reports an error, skips it, and continues.
+  4. Scans `<DIR>` for any existing symbolic links pointing to the `scrim` binary whose command names are not in the aggregated tool configuration, removes them, and logs progress.
+  5. If all links are already correct, logs that fact.
+- **Error Handling**:
+  - Exits with non-zero status and an error message if `<DIR>` is omitted, if `<DIR>` does not exist or is not a directory, if the `scrim` executable path cannot be determined, if conflicting files or symlinks prevent link creation, or if filesystem operations fail.
+
 
 ### Configuration
 

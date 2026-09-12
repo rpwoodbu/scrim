@@ -9,7 +9,7 @@
 
 - **Layered version management:** `scrim.yaml` files define precisely which version of each tool to invoke based on the current working directory. All found `scrim.yaml` files are layered, with more local configuration taking precedence. See [Configuration](#configuration).
 - **Remote tool fetching:** Rather than maintain locally-installed tools, Scrim can fetch them from the network. It downloads the archive, unpacks it into a local cache, and executes the binary directly from the cache. Multiple versions of the same archive may be cached simultaneously. Downloads are hardened with a `sha256` hash, improving security and reproducibility.
-- **Easy installation:** Scrim is a single statically-linked binary. Create a symlink in your path for each tool Scrim should wrap which points to the `scrim` binary. There are no shell hooks; this will work in any shell and without user configuration.
+- **Easy installation:** Scrim is a single statically-linked binary. Tool links in your path can be automatically populated and kept in sync using `scrim links <DIR>`. There are no shell hooks; this will work in any shell and without user configuration.
 - **Non-blocking telemetry:** Get usage telemetry for the tools that are run, including full invocation information (coming soon). Telemetry is only performed once the proxied tool is called, removing telemetry from the critical path.
 - **Low overhead:** Scrim adds less than 2 milliseconds to the tool invocation.
 
@@ -21,12 +21,16 @@
    sudo install -m 755 scrim-linux-amd64 /usr/local/bin/scrim
    ```
 3. Create `scrim.yaml` file(s) (keep reading).
+4. Populate tool links in a directory in your `PATH` (e.g., `/usr/local/bin`):
+   ```bash
+   sudo scrim links /usr/local/bin
+   ```
 
 ## Configuration
 
 Scrim is configured by `scrim.yaml` that may be placed in your project, in your home directory (`~/.config/scrim/`), and/or at the system level (`/etc/scrim/`). They layer, producing a composite configuration whereby more local elements take precedence. Scrim traverses up from the current working directory to discover `scrim.yaml` files, stopping at the repository boundary. This allows a system-wide version of a tool to be defined, but with user, project, and even project subdirectory overrides.
 
-The only other requirement is that each tool needs to have a link (symbolic or hard) in the path which points to the installed `scrim` binary. (This is similar in principle to `busybox`.) This can be defined at the system level, although the configuration is resolved based in your current working directory.
+The only other requirement is that each tool needs to have a link (symbolic or hard) in the path which points to the installed `scrim` binary. (This is similar in principle to `busybox`.) You can create and synchronize these links automatically with `scrim links <DIR>`.
 
 ```yaml
 telemetry: true # disabled (false) by default

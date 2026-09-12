@@ -640,3 +640,179 @@ tools:
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("Run 'scrim help' for usage."));
 }
+
+#[test]
+fn test_e2e_links_command() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    // 1. Missing directory argument should fail with attributed error
+    let output_no_args = Command::new(&scrim_bin)
+        .arg("links")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim links");
+    let stderr_no_args = String::from_utf8(output_no_args.stderr).unwrap();
+    assert!(!output_no_args.status.success());
+    assert!(
+        stderr_no_args.contains("[Scrim] Error: directory argument required for links command"),
+        "Unexpected error: {}",
+        stderr_no_args
+    );
+
+    // 2. Non-existent directory should fail with attributed error
+    let non_existent_dir = temp_path.join("missing_dir");
+    let output_missing = Command::new(&scrim_bin)
+        .arg("links")
+        .arg(&non_existent_dir)
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim links missing_dir");
+    let stderr_missing = String::from_utf8(output_missing.stderr).unwrap();
+    assert!(!output_missing.status.success());
+    assert!(
+        stderr_missing.contains("[Scrim] Error: Target directory"),
+        "Unexpected error: {}",
+        stderr_missing
+    );
+
+    // 3. Create target directory and mock local tool
+    let target_bin = temp_path.join("bin");
+    fs::create_dir_all(&target_bin).unwrap();
+
+    let local_tool = temp_path.join("my_tool");
+    fs::write(
+        &local_tool,
+        "#!/bin/sh\necho \"Tool run: $*\"\n",
+    )
+    .unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&local_tool).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&local_tool, perms).unwrap();
+    }
+
+    // Create scrim.yaml defining tool "tool1"
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    let config_content = format!(
+        r#"
+tools:
+  tool1:
+    system_path: "{}"
+"#,
+        local_tool.to_str().unwrap()
+    );
+    fs::write(&scrim_yaml, config_content).unwrap();
+
+    // Create a stale symlink in target_bin pointing to scrim_bin
+    let stale_link = target_bin.join("obsolete_tool");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &stale_link).unwrap();
+
+    // Create an unrelated file in target_bin
+    let unrelated_file = target_bin.join("unrelated.txt");
+    fs::write(&unrelated_file, "keep me").unwrap();
+
+    // 4. Run `scrim links <target_bin>`
+    let output_links = Command::new(&scrim_bin)
+        .arg("links")
+        .arg(&target_bin)
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim links <target_bin>");
+    let stderr_links = String::from_utf8(output_links.stderr).unwrap();
+
+    assert!(output_links.status.success(), "scrim links command failed: {}", stderr_links);
+    assert!(stderr_links.contains("[Scrim] Linked tool1"));
+    assert!(stderr_links.contains("[Scrim] Removed obsolete link obsolete_tool"));
+
+    // Verify tool1 link was created and works
+    let tool1_link = target_bin.join("tool1");
+    assert!(tool1_link.exists());
+    assert!(!stale_link.exists());
+    assert!(unrelated_file.exists());
+
+    // 5. Execute the created tool1 link as a shim
+    let output_shim = Command::new(&tool1_link)
+        .arg("arg1")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run created tool1 shim");
+    let stdout_shim = String::from_utf8(output_shim.stdout).unwrap();
+    assert!(output_shim.status.success());
+    assert!(stdout_shim.contains("Tool run: arg1"));
+
+    // 6. Run `scrim links <target_bin>` again; should not log that it linked already-existing correct links
+    let output_links_rerun = Command::new(&scrim_bin)
+        .arg("links")
+        .arg(&target_bin)
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim links <target_bin> second time");
+    let stderr_links_rerun = String::from_utf8(output_links_rerun.stderr).unwrap();
+    assert!(output_links_rerun.status.success());
+    assert!(
+        !stderr_links_rerun.contains("[Scrim] Linked tool1"),
+        "Expected no logging for already existing link, got: {}",
+        stderr_links_rerun
+    );
+    assert!(
+        stderr_links_rerun.contains("[Scrim] All links are correct"),
+        "Expected 'All links are correct' report, got: {}",
+        stderr_links_rerun
+    );
+
+    // 7. Add tools with conflicts (one regular file, one symlink pointing elsewhere, one valid new tool)
+    let config_conflicts = format!(
+        r#"
+tools:
+  tool1:
+    system_path: "{}"
+  regular_conflict:
+    system_path: "{}"
+  symlink_conflict:
+    system_path: "{}"
+  valid_new_tool:
+    system_path: "{}"
+"#,
+        local_tool.to_str().unwrap(),
+        local_tool.to_str().unwrap(),
+        local_tool.to_str().unwrap(),
+        local_tool.to_str().unwrap(),
+    );
+    fs::write(&scrim_yaml, config_conflicts).unwrap();
+
+    let reg_file = target_bin.join("regular_conflict");
+    fs::write(&reg_file, "existing file content").unwrap();
+
+    let sym_conflict = target_bin.join("symlink_conflict");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(Path::new("/bin/echo"), &sym_conflict).unwrap();
+
+    let output_conflicts = Command::new(&scrim_bin)
+        .arg("links")
+        .arg(&target_bin)
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim links with conflicts");
+
+    let stderr_conflicts = String::from_utf8(output_conflicts.stderr).unwrap();
+    // Exits non-zero because conflicts occurred
+    assert!(!output_conflicts.status.success());
+    // Reports errors for both conflicting items
+    assert!(stderr_conflicts.contains("[Scrim] Error:"));
+    assert!(stderr_conflicts.contains("regular_conflict' already exists"));
+    assert!(stderr_conflicts.contains("symlink_conflict' already exists and points elsewhere"));
+    assert!(stderr_conflicts.contains("One or more links could not be created"));
+    // Continues processing and successfully links valid_new_tool
+    assert!(stderr_conflicts.contains("[Scrim] Linked valid_new_tool"));
+    // Existing files must NOT have been overwritten
+    assert_eq!(fs::read_to_string(&reg_file).unwrap(), "existing file content");
+    assert_eq!(fs::read_link(&sym_conflict).unwrap(), Path::new("/bin/echo"));
+    assert!(target_bin.join("valid_new_tool").exists());
+}
+
