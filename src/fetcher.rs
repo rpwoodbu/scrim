@@ -513,6 +513,123 @@ mod tests {
     }
 
     #[test]
+    fn test_fetch_tool_http_ipv6_streaming_success() {
+        let temp = tempdir().unwrap();
+        let temp_path = temp.path();
+
+        let content = b"echo 'hello from ipv6 http server'";
+        let mut hasher = Sha256::new();
+        hasher.update(content);
+        let sha256 = format!("{:x}", hasher.finalize());
+
+        let listener = match std::net::TcpListener::bind("[::1]:0") {
+            Ok(l) => l,
+            Err(_) => return, // Gracefully skip if IPv6 loopback is unavailable in environment
+        };
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                use std::io::{Read, Write};
+                let mut buf = [0; 1024];
+                let _ = stream.read(&mut buf);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    content.len(),
+                    std::str::from_utf8(content).unwrap()
+                );
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+
+        let fake_home = temp_path.join("fake_home");
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(&sha256);
+
+        let url = format!("http://[::1]:{}/binary", port);
+        let result = fetch_tool("http_tool_ipv6", &url, &sha256, None, &cache_dir);
+
+        assert!(result.is_ok(), "Failed IPv6 fetch: {:?}", result.err());
+        let target_path = result.unwrap();
+        assert!(target_path.exists());
+        assert_eq!(fs::read(&target_path).unwrap(), content);
+    }
+
+    #[test]
+    fn test_fetch_tool_http_ipv6_tar_gz_success() {
+        let temp = tempdir().unwrap();
+        let temp_path = temp.path();
+
+        let mock_src_dir = temp_path.join("mock_src_dir_ipv6");
+        fs::create_dir_all(mock_src_dir.join("bin")).unwrap();
+        fs::write(mock_src_dir.join("bin").join("mytool_ipv6"), "echo 'hello ipv6 archive'").unwrap();
+
+        let tar_gz_path = temp_path.join("mytool_ipv6.tar.gz");
+        let tar_gz = fs::File::create(&tar_gz_path).unwrap();
+        let enc = flate2::write::GzEncoder::new(tar_gz, flate2::Compression::default());
+        let mut builder = tar::Builder::new(enc);
+        builder.append_dir_all(".", &mock_src_dir).unwrap();
+        builder.into_inner().unwrap().finish().unwrap();
+
+        let archive_bytes = fs::read(&tar_gz_path).unwrap();
+        let mut hasher = Sha256::new();
+        hasher.update(&archive_bytes);
+        let sha256 = format!("{:x}", hasher.finalize());
+
+        let listener = match std::net::TcpListener::bind("[::1]:0") {
+            Ok(l) => l,
+            Err(_) => return, // Gracefully skip if IPv6 loopback is unavailable in environment
+        };
+        let port = listener.local_addr().unwrap().port();
+        let archive_bytes_clone = archive_bytes.clone();
+        std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                use std::io::{Read, Write};
+                let mut buf = [0; 1024];
+                let _ = stream.read(&mut buf);
+                let response_header = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    archive_bytes_clone.len()
+                );
+                let _ = stream.write_all(response_header.as_bytes());
+                let _ = stream.write_all(&archive_bytes_clone);
+            }
+        });
+
+        let fake_home = temp_path.join("fake_home");
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(&sha256);
+
+        let url = format!("http://[::1]:{}/mytool_ipv6.tar.gz", port);
+        let result = fetch_tool("mytool_ipv6", &url, &sha256, Some("bin/mytool_ipv6"), &cache_dir);
+
+        assert!(result.is_ok(), "Failed IPv6 archive fetch: {:?}", result.err());
+        let target_path = result.unwrap();
+        assert!(target_path.exists());
+        assert!(target_path.to_str().unwrap().ends_with("bin/mytool_ipv6"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = fs::metadata(&target_path).unwrap();
+            let mode = metadata.permissions().mode();
+            assert_eq!(mode & 0o111, 0o111, "File is not executable!");
+        }
+    }
+
+    #[test]
+    fn test_fetch_tool_http_ipv6_network_error() {
+        let temp = tempdir().unwrap();
+        let fake_home = temp.path().join("fake_home");
+        let cache_dir = fake_home.join(".cache/scrim/tools").join("any_sha256");
+
+        // Port 1 on IPv6 loopback is not listening
+        let url = "http://[::1]:1";
+        let result = fetch_tool("ipv6_error_tool", url, "any_sha256", None, &cache_dir);
+
+        assert!(result.is_err());
+        let err_msg = result.err().unwrap().to_string();
+        assert!(err_msg.contains("Failed to download tool:"), "Got: {}", err_msg);
+    }
+
+    #[test]
     fn test_fetch_tool_binary_not_found_in_archive() {
         let temp = tempdir().unwrap();
         let temp_path = temp.path();

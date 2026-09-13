@@ -108,6 +108,7 @@ When a command (e.g., `node`) is invoked, Scrim follows this resolution logic:
     - If missing, fetch it synchronously, verify the digest, extract the archive (if applicable), and then execute. Fetching is implemented entirely using native Rust crates (`ureq`, `sha2`, `tar`, `flate2`, `zip`) to eliminate external shell command dependencies (`curl`, `sha256sum`, `tar`, `unzip`) and ensure Scrim is a truly self-contained binary.
         - **Concurrency Safety & Cache Poisoning**: To prevent multiple Scrim processes from corrupting the cache or using a partially downloaded file, downloads are written to a temporary file (`tempfile::NamedTempFile`) and only atomically persisted to the final cache destination upon successful verification.
         - **Streaming Hash Optimization**: To maximize performance during fetching, the SHA256 digest is computed in memory via a custom streaming writer concurrently with the download stream, completely eliminating the penalty of double-reading the payload from disk.
+        - **IPv4 & IPv6 Dual-Stack Support**: The HTTP fetching client supports both IPv4 and IPv6 network connectivity, resolving dual-stack endpoints and handling IPv6 literal addresses in URLs (e.g., `http://[::1]:<port>/...`).
 
 ### Execution
 To minimize overhead, Scrim will use `execve` (on Unix) to replace the current process with the target tool process. This ensures there is no "parent" Scrim process hanging around during tool execution.
