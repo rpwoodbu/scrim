@@ -80,47 +80,70 @@ pub fn create_links(
     }
 
     // 2. Remove obsolete symlinks pointing to scrim
-    if let Ok(entries) = fs::read_dir(target_dir) {
-        for entry in entries.flatten() {
-            let entry_path = entry.path();
-            let file_name = match entry_path.file_name().and_then(|s| s.to_str()) {
-                Some(name) => name.to_string(),
-                None => continue,
-            };
+    match fs::read_dir(target_dir) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = match entry {
+                    Ok(e) => e,
+                    Err(e) => {
+                        scrim_error!(
+                            "Failed to read directory entry in '{}': {}",
+                            target_dir.display(),
+                            e
+                        );
+                        had_errors = true;
+                        continue;
+                    }
+                };
+                let entry_path = entry.path();
+                let file_name = match entry_path.file_name().and_then(|s| s.to_str()) {
+                    Some(name) => name.to_string(),
+                    None => continue,
+                };
 
-            // If this file is a tool in the config, it was just processed above
-            if config.tools.contains_key(&file_name) {
-                continue;
-            }
+                // If this file is a tool in the config, it was just processed above
+                if config.tools.contains_key(&file_name) {
+                    continue;
+                }
 
-            // Check if entry is a symlink pointing to the scrim binary
-            if let Ok(meta) = fs::symlink_metadata(&entry_path) {
-                if meta.file_type().is_symlink() {
-                    let is_scrim_link = if let Ok(target) = fs::read_link(&entry_path) {
-                        let resolved_target = if target.is_relative() {
-                            canonical_target_dir.join(&target)
+                // Check if entry is a symlink pointing to the scrim binary
+                if let Ok(meta) = fs::symlink_metadata(&entry_path) {
+                    if meta.file_type().is_symlink() {
+                        let is_scrim_link = if let Ok(target) = fs::read_link(&entry_path) {
+                            let resolved_target = if target.is_relative() {
+                                canonical_target_dir.join(&target)
+                            } else {
+                                target.clone()
+                            };
+
+                            let canonical_resolved = fs::canonicalize(&resolved_target)
+                                .unwrap_or(resolved_target);
+
+                            canonical_resolved == canonical_scrim_exe
                         } else {
-                            target.clone()
+                            false
                         };
 
-                        let canonical_resolved = fs::canonicalize(&resolved_target)
-                            .unwrap_or(resolved_target);
-
-                        canonical_resolved == canonical_scrim_exe
-                    } else {
-                        false
-                    };
-
-                    if is_scrim_link {
-                        if let Err(e) = fs::remove_file(&entry_path) {
-                            eprintln!("[Scrim] Warning: Failed to remove obsolete link {}: {}", file_name, e);
-                        } else {
-                            scrim_progress!("Removed obsolete link {}", file_name);
-                            modified = true;
+                        if is_scrim_link {
+                            if let Err(e) = fs::remove_file(&entry_path) {
+                                scrim_error!(
+                                    "Failed to remove obsolete link '{}': {}",
+                                    file_name,
+                                    e
+                                );
+                                had_errors = true;
+                            } else {
+                                scrim_progress!("Removed obsolete link {}", file_name);
+                                modified = true;
+                            }
                         }
                     }
                 }
             }
+        }
+        Err(e) => {
+            scrim_error!("Failed to read directory '{}': {}", target_dir.display(), e);
+            had_errors = true;
         }
     }
 
@@ -265,4 +288,72 @@ mod tests {
         assert!(rust_link.exists());
         assert_eq!(fs::read_link(&rust_link).unwrap(), Path::new("../scrim"));
     }
+
+    #[test]
+    fn test_create_links_obsolete_link_removal_failure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+
+        let scrim_exe = dir.path().join("scrim");
+        fs::write(&scrim_exe, "dummy_scrim").unwrap();
+
+        let stale_link = bin_dir.join("oldtool");
+        symlink(Path::new("../scrim"), &stale_link).unwrap();
+
+        if let Ok(mut perms) = fs::metadata(&bin_dir).map(|m| m.permissions()) {
+            perms.set_mode(0o555);
+            let _ = fs::set_permissions(&bin_dir, perms.clone());
+
+            if fs::remove_file(&stale_link).is_err() {
+                let config = Config::default();
+                let res = create_links(&bin_dir, &scrim_exe, &config);
+                perms.set_mode(0o755);
+                let _ = fs::set_permissions(&bin_dir, perms);
+                assert!(res.is_err());
+                assert_eq!(
+                    res.unwrap_err().to_string(),
+                    "One or more links could not be created"
+                );
+            } else {
+                perms.set_mode(0o755);
+                let _ = fs::set_permissions(&bin_dir, perms);
+            }
+        }
+    }
+
+    #[test]
+    fn test_create_links_read_dir_failure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+
+        let scrim_exe = dir.path().join("scrim");
+        fs::write(&scrim_exe, "dummy_scrim").unwrap();
+
+        if let Ok(mut perms) = fs::metadata(&bin_dir).map(|m| m.permissions()) {
+            perms.set_mode(0o333);
+            let _ = fs::set_permissions(&bin_dir, perms.clone());
+
+            if fs::read_dir(&bin_dir).is_err() {
+                let config = Config::default();
+                let res = create_links(&bin_dir, &scrim_exe, &config);
+                perms.set_mode(0o755);
+                let _ = fs::set_permissions(&bin_dir, perms);
+                assert!(res.is_err());
+                assert_eq!(
+                    res.unwrap_err().to_string(),
+                    "One or more links could not be created"
+                );
+            } else {
+                perms.set_mode(0o755);
+                let _ = fs::set_permissions(&bin_dir, perms);
+            }
+        }
+    }
 }
+
