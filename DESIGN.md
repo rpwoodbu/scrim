@@ -31,7 +31,7 @@
 
 When invoked directly as `scrim` (i.e., `argv[0]` is `scrim`), Scrim provides a management CLI rather than proxying a tool. Running `scrim` without any arguments, or with invalid arguments, will display a short message guiding the user how to get help. The CLI supports the following commands:
 - `help`: Displays usage information and available commands.
-- `version`: Displays the version of Scrim.
+- `version`: Displays the version of Scrim. If built with workspace status stamping (e.g., release builds), it outputs the release commit hash alongside the semantic version in the format `scrim <version> (<commit_hash>)`. In unstamped builds, it outputs `scrim <version>`.
 - `config`: Reports the resultant aggregated configuration after resolving all configuration layers. Unspecified fields and empty collections are omitted from the output to reduce noise.
 - `links`: Updates links in a specified target directory for all defined tools to point to the `scrim` binary.
 
@@ -128,13 +128,14 @@ Scrim avoids heavy external logging crates. Instead, it uses a lightweight, inte
 - Use Bazel with `rules_rust` for building the project.
 - **Static Linking via musl**: Bazel and `rules_rust` are configured to target `x86_64-unknown-linux-musl` to eliminate runtime dynamic C library dependencies and ensure universal portability across Linux distributions.
 - **Modular Build Files**: To maintain a clean architecture, avoid a single overarching `BUILD.bazel` file at the repository root. Prefer individual `BUILD.bazel` files distributed within each logical segment of the project.
+- **Binary Version Stamping**: Release binaries are stamped with the Git commit hash using Bazel workspace status stamping (`--workspace_status_command`). A workspace status script (`tools/workspace_status.sh`) provides `STABLE_GIT_COMMIT`, which `rules_rust` embeds into the binary during stamped builds (`--stamp`). In unstamped builds, the commit hash is omitted.
 
 ### CI/CD
 CI and releases are automated via GitHub Actions.
 - The pipeline triggers on pushes to the `main` branch as well as on version tags (e.g., `v*`).
 - Pushes to `main` build and test the codebase to validate commits and maintain warm Bazel caches (Bazelisk, repository, and disk cache) on the default branch scope.
 - It runs all tests, including unit, integration, and manual performance validation tests, ensuring regressions are not published.
-- It builds a statically linked Linux amd64 release binary using Bazel.
+- It builds a statically linked Linux amd64 release binary using Bazel with workspace stamping enabled (`--stamp`).
 - The binary is published as a GitHub Release artifact alongside the source code only when triggered by a version tag.
 - Build status for `main` is tracked via a workflow status badge in `README.md`.
 
@@ -144,6 +145,7 @@ The project enforces the following prescriptive layout:
 - `/tests/`: Contains standard unit and integration tests as well as validation tests for benchmarks thresholds.
     - Benchmark threshold tests must be marked as `manual` as they are not correctness tests and are subject to flakiness.
 - `/benches/`: Contains the statistical microbenchmark harness code.
+- `/tools/`: Contains build and workspace automation scripts (e.g., workspace status script for binary stamping).
 
 ## Testing & Performance
 

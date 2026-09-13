@@ -1,0 +1,11 @@
+load("@rules_rust//rust:defs.bzl", "rust_test")
+
+rust_test(
+    name = "workspace_status_test",
+    srcs = ["workspace_status_test.rs"],
+    edition = "2021",
+    data = [":workspace_status.sh"],
+    deps = [
+        "@crates//:tempfile",
+    ],
+)

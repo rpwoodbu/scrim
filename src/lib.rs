@@ -6,4 +6,5 @@ pub mod resolver;
 pub mod telemetry;
 pub mod version;
 
-pub use version::VERSION;
+pub use version::{format_version, VERSION};
+

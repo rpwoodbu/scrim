@@ -29,6 +29,9 @@ fn get_home_dir() -> Option<PathBuf> {
     env::var_os("HOME").map(PathBuf::from)
 }
 
+const BINARY_COMMIT: Option<&str> = option_env!("SCRIM_GIT_COMMIT");
+
+
 fn handle_management_command(args: &[std::ffi::OsString]) {
     match args.get(1).and_then(|s| s.to_str()) {
         Some("help") => {
@@ -40,7 +43,9 @@ fn handle_management_command(args: &[std::ffi::OsString]) {
             println!("  config   Reports the resultant aggregated configuration after resolving all configuration layers.");
             println!("  links    Updates links in a specified target directory for all defined tools.");
         }
-        Some("version") => println!("scrim {}", scrim_lib::VERSION),
+        Some("version") => {
+            println!("{}", scrim_lib::format_version(BINARY_COMMIT));
+        }
         Some("config") => {
             let cwd = env::current_dir().expect("Failed to get current directory");
             let home_dir = get_home_dir();

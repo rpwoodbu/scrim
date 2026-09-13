@@ -30,7 +30,7 @@ jobs:
 
       - name: Build release binary
         run: |
-          bazel build -c opt --remote_download_toplevel //src:scrim
+          bazel build -c opt --stamp --remote_download_toplevel //src:scrim
           cp bazel-bin/src/scrim scrim-linux-amd64
           chmod +x scrim-linux-amd64
 

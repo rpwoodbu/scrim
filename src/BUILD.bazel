@@ -24,10 +24,14 @@ rust_binary(
     name = "scrim",
     srcs = ["main.rs"],
     edition = "2021",
+    rustc_env = {
+        "SCRIM_GIT_COMMIT": "{STABLE_GIT_COMMIT}",
+    },
     rustc_flags = select({
         "//:musl": ["-C", "relocation-model=static"],
         "//conditions:default": [],
     }),
+    stamp = -1,
     visibility = ["//visibility:public"],
     deps = [
         ":scrim_lib",
