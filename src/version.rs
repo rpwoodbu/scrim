@@ -1,4 +1,4 @@
-pub const VERSION: &str = "0.3.1";
+pub const VERSION: &str = "0.3.2";
 
 pub fn format_version(commit: Option<&str>) -> String {
     match commit.map(str::trim).filter(|h| !h.is_empty() && !h.starts_with('{')) {
