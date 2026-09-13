@@ -130,11 +130,13 @@ Scrim avoids heavy external logging crates. Instead, it uses a lightweight, inte
 - **Modular Build Files**: To maintain a clean architecture, avoid a single overarching `BUILD.bazel` file at the repository root. Prefer individual `BUILD.bazel` files distributed within each logical segment of the project.
 
 ### CI/CD
-Releases are automated via GitHub Actions.
-- The pipeline triggers on pushes to version tags (e.g., `v*`).
+CI and releases are automated via GitHub Actions.
+- The pipeline triggers on pushes to the `main` branch as well as on version tags (e.g., `v*`).
+- Pushes to `main` build and test the codebase to validate commits and maintain warm Bazel caches (Bazelisk, repository, and disk cache) on the default branch scope.
 - It runs all tests, including unit, integration, and manual performance validation tests, ensuring regressions are not published.
 - It builds a statically linked Linux amd64 release binary using Bazel.
-- The binary is published as a GitHub Release artifact alongside the source code.
+- The binary is published as a GitHub Release artifact alongside the source code only when triggered by a version tag.
+- Build status for `main` is tracked via a workflow status badge in `README.md`.
 
 ### Directory Layout
 The project enforces the following prescriptive layout:

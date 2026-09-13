@@ -1,5 +1,7 @@
 # Scrim
 
+[![CI/CD](https://github.com/rpwoodbu/scrim/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/rpwoodbu/scrim/actions/workflows/ci.yml?query=branch%3Amain)
+
 **Scrim** is a lightweight wrapper around command line tools offering version management and usage telemetry without the need for shell hooks. It can download and cache tools from the network, reducing system image maintenance toil.
 
 > **Origin of the Name:**  
