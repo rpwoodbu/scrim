@@ -29,11 +29,12 @@
 
 ### Management CLI
 
-When invoked directly as `scrim` (i.e., `argv[0]` is `scrim`), Scrim provides a management CLI rather than proxying a tool. Running `scrim` without any arguments, or with invalid arguments, will display a short message guiding the user how to get help. The CLI supports the following commands:
+When invoked directly as `scrim` (i.e., `argv[0]` is `scrim`), Scrim provides a management CLI rather than proxying a tool. CLI arguments are parsed using `clap`. Running `scrim` without any arguments will display usage information and available commands. Scrim will fail with an error if the user provides any invalid arguments or undefined flags. The CLI supports the following commands:
 - `help`: Displays usage information and available commands.
 - `version`: Displays the version of Scrim. If built with workspace status stamping (e.g., release builds), it outputs the release commit hash alongside the semantic version in the format `scrim <version> (<commit_hash>)`. In unstamped builds, it outputs `scrim <version>`.
 - `config`: Reports the resultant aggregated configuration after resolving all configuration layers. Unspecified fields and empty collections are omitted from the output to reduce noise.
 - `links`: Updates links in a specified target directory for all defined tools to point to the `scrim` binary.
+- `run`: Runs a defined tool directly without requiring a link.
 
 #### Links Command (`scrim links <DIR>`)
 
@@ -48,6 +49,14 @@ The `scrim links <DIR>` command creates or updates links in the specified direct
   5. If all links are already correct, logs that fact.
 - **Error Handling**:
   - Exits with non-zero status and an error message if `<DIR>` is omitted, if `<DIR>` does not exist or is not a directory, if the `scrim` executable path cannot be determined, if conflicting files or symlinks prevent link creation, or if filesystem operations fail.
+
+#### Run Command (`scrim run <TOOL> [args...]`)
+
+The `scrim run` command executes any tool defined in the aggregated configuration directly, without requiring a symlink or hardlink to `scrim`.
+
+- **Arguments**: `<TOOL>` (name of the tool to run), followed by any optional arguments `[args...]` to pass through to the executed tool.
+- **Behavior**: Behaves identically to executing `<TOOL>` via a link. Following the convention of tools like `sudo`, `--` is used to delimit the end of `scrim` options; subsequent options and arguments are passed to the command.
+- **Error Handling**: Exits with non-zero status and an error message if `<TOOL>` is omitted, if invalid flags are passed to `scrim`, or if tool resolution/execution fails.
 
 
 ### Configuration

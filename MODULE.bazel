@@ -68,6 +68,10 @@ crate.spec(
     package = "criterion",
     version = "0.5",
 )
+crate.spec(
+    package = "clap",
+    version = "4",
+)
 crate.from_specs()
 use_repo(crate, "crates")
 

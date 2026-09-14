@@ -61,6 +61,11 @@ $ go version
 go version go1.21.5 linux/amd64
 ```
 
+Alternatively, you can run any configured tool directly without a link:
+```bash
+scrim run go version
+```
+
 Run `scrim help` to see administrative functions.
 
 ## Comparison to Alternatives

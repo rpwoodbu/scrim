@@ -681,8 +681,10 @@ fn test_e2e_management_cli() {
         .current_dir(temp_path)
         .output()
         .expect("Failed to run scrim without args");
+    assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("Run 'scrim help' for usage."));
+    assert!(stdout.contains("Scrim: The transparent tool proxy."));
+    assert!(stdout.contains("Commands:"));
 
     // 2. Run with 'help'
     let output = Command::new(&scrim_bin)
@@ -693,19 +695,43 @@ fn test_e2e_management_cli() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("Scrim: The transparent tool proxy."));
     assert!(stdout.contains("Commands:"));
+    assert!(stdout.contains("run      Runs a defined tool directly without requiring a link."));
 
-    // 3. Run with 'version'
-    let output = Command::new(&scrim_bin)
-        .arg("version")
+    // 2.1 Run with '--help' and '-h'
+    let output_help_flag = Command::new(&scrim_bin)
+        .arg("--help")
         .current_dir(temp_path)
         .output()
-        .expect("Failed to run scrim version");
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let trimmed = stdout.trim();
-    assert!(trimmed.starts_with(&format!("scrim {}", scrim_lib::VERSION)));
-    if trimmed != format!("scrim {}", scrim_lib::VERSION) {
-        assert!(trimmed.starts_with(&format!("scrim {} (", scrim_lib::VERSION)));
-        assert!(trimmed.ends_with(')'));
+        .expect("Failed to run scrim --help");
+    assert!(output_help_flag.status.success());
+    let stdout_help_flag = String::from_utf8(output_help_flag.stdout).unwrap();
+    assert!(stdout_help_flag.contains("Scrim: The transparent tool proxy."));
+    assert!(stdout_help_flag.contains("Commands:"));
+
+    let output_h_flag = Command::new(&scrim_bin)
+        .arg("-h")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim -h");
+    assert!(output_h_flag.status.success());
+    let stdout_h_flag = String::from_utf8(output_h_flag.stdout).unwrap();
+    assert!(stdout_h_flag.contains("Scrim: The transparent tool proxy."));
+
+    // 3. Run with 'version', '--version', and '-V'
+    for ver_arg in ["version", "--version", "-V"] {
+        let output = Command::new(&scrim_bin)
+            .arg(ver_arg)
+            .current_dir(temp_path)
+            .output()
+            .unwrap_or_else(|_| panic!("Failed to run scrim {}", ver_arg));
+        assert!(output.status.success());
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let trimmed = stdout.trim();
+        assert!(trimmed.starts_with(&format!("scrim {}", scrim_lib::VERSION)));
+        if trimmed != format!("scrim {}", scrim_lib::VERSION) {
+            assert!(trimmed.starts_with(&format!("scrim {} (", scrim_lib::VERSION)));
+            assert!(trimmed.ends_with(')'));
+        }
     }
 
     // 4. Run with 'config'
@@ -746,8 +772,19 @@ tools:
         .current_dir(temp_path)
         .output()
         .expect("Failed to run scrim unknown");
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("Run 'scrim help' for usage."));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(!output.status.success());
+    assert!(stderr.contains("[Scrim] Error: unrecognized subcommand 'unknown_command'"));
+
+    // 6. Run with undefined flag to scrim
+    let output_flag = Command::new(&scrim_bin)
+        .arg("--undefined-flag")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim with undefined flag");
+    let stderr_flag = String::from_utf8(output_flag.stderr).unwrap();
+    assert!(!output_flag.status.success());
+    assert!(stderr_flag.contains("[Scrim] Error: unexpected argument '--undefined-flag'"));
 }
 
 #[test]
@@ -924,4 +961,234 @@ tools:
     assert_eq!(fs::read_link(&sym_conflict).unwrap(), Path::new("/bin/echo"));
     assert!(target_bin.join("valid_new_tool").exists());
 }
+
+#[test]
+fn test_e2e_run_command() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    // 1. Missing tool argument should fail with attributed error
+    let output_no_tool = Command::new(&scrim_bin)
+        .arg("run")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim run without tool");
+    let stderr_no_tool = String::from_utf8(output_no_tool.stderr).unwrap();
+    assert!(!output_no_tool.status.success());
+    assert!(stderr_no_tool.contains("[Scrim] Error: tool name argument required for run command"));
+
+    // 2. Missing tool argument after '--' should fail with attributed error
+    let output_dash_only = Command::new(&scrim_bin)
+        .arg("run")
+        .arg("--")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim run --");
+    let stderr_dash_only = String::from_utf8(output_dash_only.stderr).unwrap();
+    assert!(!output_dash_only.status.success());
+    assert!(stderr_dash_only.contains("[Scrim] Error: tool name argument required for run command"));
+
+    // 3. Create a local mock tool script
+    let mock_tool = temp_path.join("my_runner_tool");
+    fs::write(
+        &mock_tool,
+        "#!/bin/sh\necho \"Executed via run: args=$*\"\n",
+    )
+    .unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&mock_tool).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&mock_tool, perms).unwrap();
+    }
+
+    // Create scrim.yaml defining 'mytool'
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    let config_content = format!(
+        r#"
+telemetry: false
+tools:
+  mytool:
+    system_path: "{}"
+"#,
+        mock_tool.to_str().unwrap()
+    );
+    fs::write(&scrim_yaml, config_content).unwrap();
+
+    // 4. Unknown tool should fail with attributed error
+    let output_unknown = Command::new(&scrim_bin)
+        .arg("run")
+        .arg("nonexistent_tool")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim run nonexistent_tool");
+    let stderr_unknown = String::from_utf8(output_unknown.stderr).unwrap();
+    assert!(!output_unknown.status.success());
+    assert!(stderr_unknown.contains("[Scrim] Error: Tool 'nonexistent_tool' not found in config"));
+
+    // 5. Successful run without link (positional arguments)
+    let output_success = Command::new(&scrim_bin)
+        .arg("run")
+        .arg("mytool")
+        .arg("arg1")
+        .arg("arg2")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim run mytool arg1 arg2");
+    let stdout_success = String::from_utf8(output_success.stdout).unwrap();
+    assert!(output_success.status.success());
+    assert!(stdout_success.contains("Executed via run: args=arg1 arg2"));
+
+    // 6. Passing flags to scrim run without '--' should fail because scrim defines no flags
+    let output_flag_without_dash = Command::new(&scrim_bin)
+        .arg("run")
+        .arg("mytool")
+        .arg("-v")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim run mytool -v");
+    let stderr_flag_without_dash = String::from_utf8(output_flag_without_dash.stderr).unwrap();
+    assert!(!output_flag_without_dash.status.success());
+    assert!(stderr_flag_without_dash.contains("[Scrim] Error: unexpected argument '-v'"));
+
+    let output_long_flag_without_dash = Command::new(&scrim_bin)
+        .arg("run")
+        .arg("mytool")
+        .arg("--my-flag")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim run mytool --my-flag");
+    let stderr_long_flag_without_dash = String::from_utf8(output_long_flag_without_dash.stderr).unwrap();
+    assert!(!output_long_flag_without_dash.status.success());
+    assert!(stderr_long_flag_without_dash.contains("[Scrim] Error: unexpected argument '--my-flag'"));
+
+    // 7. Passing flags to tool with '--' preceding tool name
+    let output_flags_dash_before = Command::new(&scrim_bin)
+        .arg("run")
+        .arg("--")
+        .arg("mytool")
+        .arg("-v")
+        .arg("--my-flag=value")
+        .arg("positional")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim run -- mytool flags");
+    let stdout_flags_dash_before = String::from_utf8(output_flags_dash_before.stdout).unwrap();
+    assert!(output_flags_dash_before.status.success());
+    assert!(stdout_flags_dash_before.contains("Executed via run: args=-v --my-flag=value positional"));
+
+    // 8. Passing flags to tool with '--' succeeding tool name
+    let output_flags_dash_after = Command::new(&scrim_bin)
+        .arg("run")
+        .arg("mytool")
+        .arg("--")
+        .arg("-v")
+        .arg("--another-flag")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim run mytool -- flags");
+    let stdout_flags_dash_after = String::from_utf8(output_flags_dash_after.stdout).unwrap();
+    assert!(output_flags_dash_after.status.success());
+    assert!(stdout_flags_dash_after.contains("Executed via run: args=-v --another-flag"));
+
+    // 8.1 Passing -h to tool via '--'
+    let output_h_with_dash = Command::new(&scrim_bin)
+        .arg("run")
+        .arg("mytool")
+        .arg("--")
+        .arg("-h")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim run mytool -- -h");
+    let stdout_h_with_dash = String::from_utf8(output_h_with_dash.stdout).unwrap();
+    assert!(output_h_with_dash.status.success());
+    assert!(stdout_h_with_dash.contains("Executed via run: args=-h"));
+
+    let output_h_dash_before = Command::new(&scrim_bin)
+        .arg("run")
+        .arg("--")
+        .arg("mytool")
+        .arg("-h")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim run -- mytool -h");
+    let stdout_h_dash_before = String::from_utf8(output_h_dash_before.stdout).unwrap();
+    assert!(output_h_dash_before.status.success());
+    assert!(stdout_h_dash_before.contains("Executed via run: args=-h"));
+
+    // 8.2 Calling help on run subcommand directly
+    let output_run_h = Command::new(&scrim_bin)
+        .arg("run")
+        .arg("-h")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim run -h");
+    assert!(output_run_h.status.success());
+    let stdout_run_h = String::from_utf8(output_run_h.stdout).unwrap();
+    assert!(stdout_run_h.contains("Runs a defined tool directly without requiring a link."));
+
+    // 9. Passing '--' intended for the tool itself
+    let output_tool_double_dash = Command::new(&scrim_bin)
+        .arg("run")
+        .arg("--")
+        .arg("mytool")
+        .arg("--")
+        .arg("tool_arg")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim run -- mytool -- tool_arg");
+    let stdout_tool_double_dash = String::from_utf8(output_tool_double_dash.stdout).unwrap();
+    assert!(output_tool_double_dash.status.success());
+    assert!(stdout_tool_double_dash.contains("Executed via run: args=-- tool_arg"));
+
+    // 10. Running a fetched tool via run command
+    let fetch_src = temp_path.join("fetch_src");
+    fs::write(&fetch_src, "#!/bin/sh\necho \"Fetched via run: args=$*\"\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&fetch_src).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&fetch_src, perms).unwrap();
+    }
+    let fetch_sha256 = compute_sha256(&fetch_src);
+
+    let config_fetch = format!(
+        r#"
+telemetry: false
+tools:
+  fetched_tool:
+    url: "file://{}"
+    sha256: "{}"
+"#,
+        fetch_src.to_str().unwrap(),
+        fetch_sha256
+    );
+    fs::write(&scrim_yaml, config_fetch).unwrap();
+
+    let cache_home = temp_path.join("fake_home");
+    fs::create_dir_all(&cache_home).unwrap();
+
+    let output_fetch = Command::new(&scrim_bin)
+        .arg("run")
+        .arg("fetched_tool")
+        .arg("downloaded_arg")
+        .current_dir(temp_path)
+        .env("HOME", &cache_home)
+        .output()
+        .expect("Failed to run scrim run fetched_tool");
+    let stdout_fetch = String::from_utf8(output_fetch.stdout).unwrap();
+    assert!(output_fetch.status.success());
+    assert!(stdout_fetch.contains("Fetched via run: args=downloaded_arg"));
+
+    let expected_cached_binary = cache_home
+        .join(".cache/scrim/tools")
+        .join(&fetch_sha256)
+        .join("fetched_tool");
+    assert!(expected_cached_binary.exists());
+}
+
 

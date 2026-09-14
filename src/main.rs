@@ -32,30 +32,26 @@ fn get_home_dir() -> Option<PathBuf> {
 const BINARY_COMMIT: Option<&str> = option_env!("SCRIM_GIT_COMMIT");
 
 
-fn handle_management_command(args: &[std::ffi::OsString]) {
-    match args.get(1).and_then(|s| s.to_str()) {
-        Some("help") => {
-            println!("Scrim: The transparent tool proxy.");
-            println!("Usage: scrim <command> [args]");
-            println!("\nCommands:");
-            println!("  help     Displays usage information and available commands.");
-            println!("  version  Displays the version of Scrim.");
-            println!("  config   Reports the resultant aggregated configuration after resolving all configuration layers.");
-            println!("  links    Updates links in a specified target directory for all defined tools.");
+fn load_configuration() -> (config::Config, Option<PathBuf>) {
+    let cwd = env::current_dir().expect("Failed to get current directory");
+    let home_dir = get_home_dir();
+    let config = match config::load_config(&cwd, home_dir.as_deref()) {
+        Ok(c) => c,
+        Err(e) => {
+            scrim_lib::scrim_error!("Failed to load configuration: {}", e);
+            std::process::exit(1);
         }
-        Some("version") => {
+    };
+    (config, home_dir)
+}
+
+fn handle_management_command(args: &[std::ffi::OsString]) {
+    match scrim_lib::cli::parse_management_cli(args) {
+        scrim_lib::cli::CliParseResult::Command(scrim_lib::cli::CliCommand::Version) => {
             println!("{}", scrim_lib::format_version(BINARY_COMMIT));
         }
-        Some("config") => {
-            let cwd = env::current_dir().expect("Failed to get current directory");
-            let home_dir = get_home_dir();
-            let config = match config::load_config(&cwd, home_dir.as_deref()) {
-                Ok(c) => c,
-                Err(e) => {
-                    scrim_lib::scrim_error!("Failed to load configuration: {}", e);
-                    std::process::exit(1);
-                }
-            };
+        scrim_lib::cli::CliParseResult::Command(scrim_lib::cli::CliCommand::Config) => {
+            let (config, _) = load_configuration();
             match serde_yaml::to_string(&config) {
                 Ok(yaml) => print!("{}", yaml),
                 Err(e) => {
@@ -64,9 +60,9 @@ fn handle_management_command(args: &[std::ffi::OsString]) {
                 }
             }
         }
-        Some("links") => {
-            let dir_arg = match args.get(2) {
-                Some(arg) => Path::new(arg),
+        scrim_lib::cli::CliParseResult::Command(scrim_lib::cli::CliCommand::Links { dir }) => {
+            let dir_arg = match dir {
+                Some(ref d) => d.as_path(),
                 None => {
                     scrim_lib::scrim_error!("directory argument required for links command");
                     std::process::exit(1);
@@ -79,36 +75,40 @@ fn handle_management_command(args: &[std::ffi::OsString]) {
                     std::process::exit(1);
                 }
             };
-            let cwd = env::current_dir().expect("Failed to get current directory");
-            let home_dir = get_home_dir();
-            let config = match config::load_config(&cwd, home_dir.as_deref()) {
-                Ok(c) => c,
-                Err(e) => {
-                    scrim_lib::scrim_error!("Failed to load configuration: {}", e);
-                    std::process::exit(1);
-                }
-            };
-
+            let (config, _) = load_configuration();
             if let Err(e) = scrim_lib::linker::create_links(dir_arg, &scrim_exe, &config) {
                 scrim_lib::scrim_error!("{}", e);
                 std::process::exit(1);
             }
         }
-        _ => println!("Run 'scrim help' for usage."),
+        scrim_lib::cli::CliParseResult::Command(scrim_lib::cli::CliCommand::Run { tool, args }) => {
+            let tool_name = match tool {
+                Some(t) => t,
+                None => {
+                    scrim_lib::scrim_error!("tool name argument required for run command");
+                    std::process::exit(1);
+                }
+            };
+            execute_tool(&tool_name, &args);
+        }
+        scrim_lib::cli::CliParseResult::Help(text) => {
+            print!("{}", text);
+        }
+        scrim_lib::cli::CliParseResult::Error(err) => {
+            let trimmed_err = err.strip_prefix("error: ").unwrap_or(&err);
+            scrim_lib::scrim_error!("{}", trimmed_err);
+            std::process::exit(1);
+        }
     }
 }
 
-fn proxy_command(program_name: &str, args: &[std::ffi::OsString]) {
-    let cwd = env::current_dir().expect("Failed to get current directory");
-    let home_dir = get_home_dir();
-    let config = match config::load_config(&cwd, home_dir.as_deref()) {
-        Ok(c) => c,
-        Err(e) => {
-            scrim_lib::scrim_error!("Failed to load configuration: {}", e);
-            std::process::exit(1);
-        }
-    };
+fn proxy_command(program_name: &str, args: &[std::ffi::OsString]) -> ! {
+    let tool_args = if args.len() > 1 { &args[1..] } else { &[] };
+    execute_tool(program_name, tool_args);
+}
 
+fn execute_tool(program_name: &str, tool_args: &[std::ffi::OsString]) -> ! {
+    let (config, home_dir) = load_configuration();
     let resolution = resolver::resolve_tool(program_name, Some(&config));
 
     match resolution {
@@ -131,9 +131,9 @@ fn proxy_command(program_name: &str, args: &[std::ffi::OsString]) {
             // Prepare the command
             let mut cmd = Command::new(&target_path);
             
-            // Pass through all arguments (excluding the shim itself)
-            if args.len() > 1 {
-                cmd.args(&args[1..]);
+            // Pass through all arguments
+            if !tool_args.is_empty() {
+                cmd.args(tool_args);
             }
 
             // Fork for telemetry (non-blocking) if enabled in config
