@@ -84,7 +84,7 @@ However, Scrim is specifically designed to solve **enterprise fleet deployment**
 | **Shell Env Var Management** | ❌ | ✅ | ❌ | ❌ | ✅ |
 | **Fetches Binaries** | ✅ | ❌ | ✅ | ✅ | ✅ |
 | **Works Without Plugins** | ✅ | N/A | ❌ | ✅ | ✅ |
-| **On-Demand Fetching** | ✅ | ❌ | ❌ | ✅ | ✅ |
+| **On-Demand Fetching** | ✅ | ❌<br>*(eager on directory entry)* | ❌<br>*(requires `asdf install`)* | ✅ | ✅ |
 | **Works Without Shell Hooks** | ✅ | ❌ | ✅ | ✅ | ❌ |
 | **Uses Shims in `PATH`** | ✅<br>*(Symlink to Rust binary)* | ❌ | ✅<br>*(Bash script to Go binary)* | ✅<br>*(Symlink to Rust binary)* | ❌ |
 | **System-wide Multi-User Setup** | ✅ | ❌ | ✅ | ✅ | ❌ |
