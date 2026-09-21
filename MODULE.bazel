@@ -57,6 +57,10 @@ crate.spec(
     version = "1.0",
 )
 crate.spec(
+    package = "lzma-rs",
+    version = "0.3",
+)
+crate.spec(
     package = "libc",
     version = "0.2",
 )

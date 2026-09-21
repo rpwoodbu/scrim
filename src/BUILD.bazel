@@ -15,6 +15,7 @@ rust_library(
         "@crates//:sha2",
         "@crates//:tar",
         "@crates//:flate2",
+        "@crates//:lzma-rs",
         "@crates//:zip",
         "@crates//:tempfile",
         "@crates//:clap",

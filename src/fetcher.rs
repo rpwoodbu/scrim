@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::fs::{self, File};
-use std::io::{self, Write};
+use std::io::{self, Seek, Write};
 use sha2::{Sha256, Digest};
 use flate2::read::GzDecoder;
 use tar::Archive;
@@ -29,8 +29,9 @@ pub fn fetch_tool(tool_name: &str, url: &str, sha256: &str, archive_path: Option
     // Ignore query parameters when detecting archive types
     let url_path = url.split('?').next().unwrap_or(url);
     let is_tar_gz = url_path.ends_with(".tar.gz") || url_path.ends_with(".tgz");
+    let is_tar_xz = url_path.ends_with(".tar.xz") || url_path.ends_with(".txz") || url_path.ends_with(".xz");
     let is_zip = url_path.ends_with(".zip");
-    let is_archive = is_tar_gz || is_zip;
+    let is_archive = is_tar_gz || is_tar_xz || is_zip;
 
     let target_path = if is_archive {
         if let Some(bin) = archive_path {
@@ -97,6 +98,18 @@ pub fn fetch_tool(tool_name: &str, url: &str, sha256: &str, archive_path: Option
             let mut archive = Archive::new(tar);
             if let Err(e) = archive.unpack(unpack_dir.path()) {
                 return Err(format!("Failed to extract tar.gz archive: {}", e).into());
+            }
+        } else if is_tar_xz {
+            let tar_xz = temp_file.reopen()?;
+            let mut reader = std::io::BufReader::new(tar_xz);
+            let mut decompressed_tar = tempfile::tempfile_in(tools_dir)?;
+            if let Err(e) = lzma_rs::xz_decompress(&mut reader, &mut decompressed_tar) {
+                return Err(format!("Failed to extract xz archive: {}", e).into());
+            }
+            decompressed_tar.rewind()?;
+            let mut archive = Archive::new(decompressed_tar);
+            if let Err(e) = archive.unpack(unpack_dir.path()) {
+                return Err(format!("Failed to extract tar.xz archive: {}", e).into());
             }
         } else if is_zip {
             let zip_file = temp_file.reopen()?;
@@ -748,6 +761,197 @@ mod tests {
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), cached_bin);
+    }
+
+    #[test]
+    fn test_fetch_tool_tar_xz_success() {
+        let temp = tempdir().unwrap();
+        let temp_path = temp.path();
+
+        let mut tar_bytes = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut tar_bytes);
+            let mut header = tar::Header::new_gnu();
+            let content = b"echo 'hello tar xz'";
+            header.set_size(content.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder.append_data(&mut header, "bin/mytool", &content[..]).unwrap();
+            builder.finish().unwrap();
+        }
+        let mut xz_bytes = Vec::new();
+        lzma_rs::xz_compress(&mut &tar_bytes[..], &mut xz_bytes).unwrap();
+
+        let tar_xz_path = temp_path.join("mytool.tar.xz");
+        fs::write(&tar_xz_path, &xz_bytes).unwrap();
+
+        let sha256 = format!("{:x}", Sha256::digest(&xz_bytes));
+        let fake_home = temp_path.join("fake_home");
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(&sha256);
+
+        let file_url = format!("file://{}", tar_xz_path.to_str().unwrap());
+        let result = fetch_tool("my_test_tool", &file_url, &sha256, Some("bin/mytool"), &cache_dir);
+
+        assert!(result.is_ok());
+        let target_path = result.unwrap();
+        assert!(target_path.exists());
+        assert!(target_path.to_str().unwrap().contains("fake_home/.cache/scrim/tools/"));
+        assert!(target_path.to_str().unwrap().ends_with("bin/mytool"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = fs::metadata(&target_path).unwrap();
+            let mode = metadata.permissions().mode();
+            assert_eq!(mode & 0o111, 0o111, "File is not executable!");
+        }
+    }
+
+    #[test]
+    fn test_fetch_tool_txz_extension() {
+        let temp = tempdir().unwrap();
+        let temp_path = temp.path();
+
+        let mut tar_bytes = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut tar_bytes);
+            let mut header = tar::Header::new_gnu();
+            let content = b"echo 'hello txz'";
+            header.set_size(content.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder.append_data(&mut header, "mytool", &content[..]).unwrap();
+            builder.finish().unwrap();
+        }
+        let mut xz_bytes = Vec::new();
+        lzma_rs::xz_compress(&mut &tar_bytes[..], &mut xz_bytes).unwrap();
+
+        let txz_path = temp_path.join("mytool.txz");
+        fs::write(&txz_path, &xz_bytes).unwrap();
+
+        let sha256 = format!("{:x}", Sha256::digest(&xz_bytes));
+        let fake_home = temp_path.join("fake_home");
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(&sha256);
+
+        let file_url = format!("file://{}", txz_path.to_str().unwrap());
+        let result = fetch_tool("mytool", &file_url, &sha256, None, &cache_dir);
+
+        assert!(result.is_ok());
+        let target_path = result.unwrap();
+        assert!(target_path.exists());
+        assert!(target_path.to_str().unwrap().ends_with("mytool"));
+    }
+
+    #[test]
+    fn test_fetch_tool_xz_extension() {
+        let temp = tempdir().unwrap();
+        let temp_path = temp.path();
+
+        let mut tar_bytes = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut tar_bytes);
+            let mut header = tar::Header::new_gnu();
+            let content = b"echo 'hello xz'";
+            header.set_size(content.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder.append_data(&mut header, "bin/mytool", &content[..]).unwrap();
+            builder.finish().unwrap();
+        }
+        let mut xz_bytes = Vec::new();
+        lzma_rs::xz_compress(&mut &tar_bytes[..], &mut xz_bytes).unwrap();
+
+        let xz_path = temp_path.join("mytool.xz");
+        fs::write(&xz_path, &xz_bytes).unwrap();
+
+        let sha256 = format!("{:x}", Sha256::digest(&xz_bytes));
+        let fake_home = temp_path.join("fake_home");
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(&sha256);
+
+        let file_url = format!("file://{}", xz_path.to_str().unwrap());
+        let result = fetch_tool("mytool", &file_url, &sha256, Some("bin/mytool"), &cache_dir);
+
+        assert!(result.is_ok());
+        let target_path = result.unwrap();
+        assert!(target_path.exists());
+        assert!(target_path.to_str().unwrap().ends_with("bin/mytool"));
+    }
+
+    #[test]
+    fn test_fetch_tool_corrupt_xz() {
+        let temp = tempdir().unwrap();
+        let temp_path = temp.path();
+
+        let corrupt_path = temp_path.join("corrupt.tar.xz");
+        fs::write(&corrupt_path, b"not a valid xz file").unwrap();
+
+        let sha256 = format!("{:x}", Sha256::digest(b"not a valid xz file"));
+        let fake_home = temp_path.join("fake_home");
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(&sha256);
+
+        let file_url = format!("file://{}", corrupt_path.to_str().unwrap());
+        let result = fetch_tool("corrupt_tool", &file_url, &sha256, None, &cache_dir);
+
+        assert!(result.is_err());
+        let err_msg = result.err().unwrap().to_string();
+        assert!(err_msg.contains("Failed to extract xz archive"), "Got: {}", err_msg);
+    }
+
+    #[test]
+    fn test_fetch_tool_corrupt_tar_in_xz() {
+        let temp = tempdir().unwrap();
+        let temp_path = temp.path();
+
+        let mut xz_bytes = Vec::new();
+        lzma_rs::xz_compress(&mut &b"not a tarball"[..], &mut xz_bytes).unwrap();
+
+        let corrupt_tar_path = temp_path.join("corrupt_tar.tar.xz");
+        fs::write(&corrupt_tar_path, &xz_bytes).unwrap();
+
+        let sha256 = format!("{:x}", Sha256::digest(&xz_bytes));
+        let fake_home = temp_path.join("fake_home");
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(&sha256);
+
+        let file_url = format!("file://{}", corrupt_tar_path.to_str().unwrap());
+        let result = fetch_tool("corrupt_tool", &file_url, &sha256, None, &cache_dir);
+
+        assert!(result.is_err());
+        let err_msg = result.err().unwrap().to_string();
+        assert!(err_msg.contains("Failed to extract tar.xz archive"), "Got: {}", err_msg);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_fetch_tool_tar_xz_symlink_rejection() {
+        let temp = tempdir().unwrap();
+        let temp_path = temp.path();
+
+        let mut tar_bytes = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut tar_bytes);
+            let mut header = tar::Header::new_gnu();
+            header.set_size(0);
+            header.set_entry_type(tar::EntryType::Symlink);
+            header.set_link_name("/etc/passwd").unwrap();
+            builder.append_data(&mut header, "mytool", &[][..]).unwrap();
+            builder.finish().unwrap();
+        }
+        let mut xz_bytes = Vec::new();
+        lzma_rs::xz_compress(&mut &tar_bytes[..], &mut xz_bytes).unwrap();
+
+        let tar_xz_path = temp_path.join("mytool.tar.xz");
+        fs::write(&tar_xz_path, &xz_bytes).unwrap();
+
+        let sha256 = format!("{:x}", Sha256::digest(&xz_bytes));
+        let fake_home = temp_path.join("fake_home");
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(&sha256);
+
+        let file_url = format!("file://{}", tar_xz_path.to_str().unwrap());
+        let result = fetch_tool("mytool", &file_url, &sha256, None, &cache_dir);
+
+        assert!(result.is_err());
+        let err_msg = result.err().unwrap().to_string();
+        assert!(err_msg.contains("is a symlink, which is not allowed"));
     }
 }
 

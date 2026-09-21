@@ -5,6 +5,13 @@ rust_test(
     srcs = ["integration_test.rs"],
     edition = "2021",
     data = ["//src:scrim"],
+    # Run tests serially to prevent race conditions across tests that access
+    # the shared telemetry log file at /tmp/scrim_telemetry.log.
+    # TODO: Support configuring the telemetry log path so each test can use an
+    # isolated log file and run concurrently.
+    env = {
+        "RUST_TEST_THREADS": "1",
+    },
     deps = [
         "//src:scrim_lib",
         "@crates//:tempfile",
