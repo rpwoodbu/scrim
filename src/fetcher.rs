@@ -23,8 +23,42 @@ impl<W: Write, D: Digest> Write for HashingWriter<W, D> {
     }
 }
 
+fn cached_urls_contain(url_file: &Path, url: &str) -> bool {
+    if let Ok(content) = fs::read_to_string(url_file) {
+        content.lines().any(|line| line.trim() == url.trim())
+    } else {
+        false
+    }
+}
+
+fn record_cached_url(url_file: &Path, url: &str) -> io::Result<()> {
+    if cached_urls_contain(url_file, url) {
+        return Ok(());
+    }
+    let needs_leading_newline = if let Ok(content) = fs::read_to_string(url_file) {
+        !content.is_empty() && !content.ends_with('\n')
+    } else {
+        false
+    };
+
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(url_file)?;
+    if needs_leading_newline {
+        writeln!(file)?;
+    }
+    writeln!(file, "{}", url.trim())?;
+    file.flush()?;
+    Ok(())
+}
+
 pub fn fetch_tool(tool_name: &str, url: &str, sha256: &str, archive_path: Option<&str>, cache_dir: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let tools_dir = cache_dir.parent().unwrap_or(cache_dir);
+    let tools_dir = match cache_dir.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    let url_file = tools_dir.join(format!("{}.url", sha256));
     
     // Ignore query parameters when detecting archive types
     let url_path = url.split('?').next().unwrap_or(url);
@@ -47,7 +81,7 @@ pub fn fetch_tool(tool_name: &str, url: &str, sha256: &str, archive_path: Option
         cache_dir.join(tool_name)
     };
 
-    if target_path.exists() {
+    if target_path.exists() && cached_urls_contain(&url_file, url) {
         return Ok(target_path);
     }
 
@@ -164,6 +198,7 @@ pub fn fetch_tool(tool_name: &str, url: &str, sha256: &str, archive_path: Option
             // Rename succeeded, prevent the TempDir destructor from trying to delete the old path
             let _ = unpack_dir.keep();
         }
+        record_cached_url(&url_file, url)?;
     } else {
         fs::create_dir_all(&cache_dir)?;
         
@@ -187,6 +222,7 @@ pub fn fetch_tool(tool_name: &str, url: &str, sha256: &str, archive_path: Option
                 return Err(format!("Failed to persist single binary to cache: {}", e).into());
             }
         }
+        record_cached_url(&url_file, url)?;
     }
 
     Ok(target_path)
@@ -221,6 +257,10 @@ mod tests {
         assert!(target_path.exists());
         assert!(target_path.to_str().unwrap().contains("fake_home/.cache/scrim/tools/"));
         assert!(target_path.to_str().unwrap().ends_with("my_test_tool"));
+
+        let url_file = fake_home.join(".cache/scrim/tools").join(format!("{}.url", sha256));
+        assert!(url_file.exists());
+        assert_eq!(fs::read_to_string(&url_file).unwrap().trim(), file_url.trim());
 
         #[cfg(unix)]
         {
@@ -757,10 +797,128 @@ mod tests {
         let cached_bin = cache_dir.join("cached_tool");
         fs::write(&cached_bin, b"already cached").unwrap();
 
+        let url_file = fake_home.join(".cache/scrim/tools").join(format!("{}.url", sha256));
+        fs::write(&url_file, "http://invalid.invalid/never_called\n").unwrap();
+
         let result = fetch_tool("cached_tool", "http://invalid.invalid/never_called", sha256, None, &cache_dir);
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), cached_bin);
+    }
+
+    #[test]
+    fn test_fetch_tool_existing_cache_missing_url_file_downloads() {
+        let temp = tempdir().unwrap();
+        let temp_path = temp.path();
+        let fake_home = temp_path.join("fake_home");
+
+        let sha256 = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(sha256);
+        fs::create_dir_all(&cache_dir).unwrap();
+        let cached_bin = cache_dir.join("cached_tool");
+        fs::write(&cached_bin, b"already cached").unwrap();
+
+        // Without <sha256>.url, fetch_tool must not return the cached binary and must attempt download
+        let result = fetch_tool("cached_tool", "http://invalid.invalid/never_called", sha256, None, &cache_dir);
+
+        assert!(result.is_err());
+        assert!(result.err().unwrap().to_string().contains("Failed to download tool"));
+    }
+
+    #[test]
+    fn test_fetch_tool_existing_cache_mismatched_url_downloads() {
+        let temp = tempdir().unwrap();
+        let temp_path = temp.path();
+        let fake_home = temp_path.join("fake_home");
+
+        let sha256 = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(sha256);
+        fs::create_dir_all(&cache_dir).unwrap();
+        let cached_bin = cache_dir.join("cached_tool");
+        fs::write(&cached_bin, b"already cached").unwrap();
+
+        let url_file = fake_home.join(".cache/scrim/tools").join(format!("{}.url", sha256));
+        fs::write(&url_file, "http://previously.downloaded/tool\n").unwrap();
+
+        // With mismatched URL in <sha256>.url, fetch_tool must not use cache and must attempt download
+        let result = fetch_tool("cached_tool", "http://invalid.invalid/never_called", sha256, None, &cache_dir);
+
+        assert!(result.is_err());
+        assert!(result.err().unwrap().to_string().contains("Failed to download tool"));
+    }
+
+    #[test]
+    fn test_fetch_tool_url_updated_hash_mismatch_facilitates_update() {
+        let temp = tempdir().unwrap();
+        let temp_path = temp.path();
+        let fake_home = temp_path.join("fake_home");
+
+        // 1. Initial cached version (v1)
+        let old_src = temp_path.join("v1_tool");
+        fs::write(&old_src, b"version 1 binary").unwrap();
+        let old_sha256 = format!("{:x}", Sha256::digest(b"version 1 binary"));
+        let old_url = format!("file://{}", old_src.to_str().unwrap());
+
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(&old_sha256);
+        let res_v1 = fetch_tool("my_tool", &old_url, &old_sha256, None, &cache_dir);
+        assert!(res_v1.is_ok());
+
+        // 2. User updates URL to v2 but leaves sha256 as old_sha256
+        let new_src = temp_path.join("v2_tool");
+        fs::write(&new_src, b"version 2 binary with different content").unwrap();
+        let new_sha256 = format!("{:x}", Sha256::digest(b"version 2 binary with different content"));
+        let new_url = format!("file://{}", new_src.to_str().unwrap());
+
+        let res_v2 = fetch_tool("my_tool", &new_url, &old_sha256, None, &cache_dir);
+        assert!(res_v2.is_err());
+        let err_msg = res_v2.err().unwrap().to_string();
+        assert!(err_msg.contains("SHA256 verification failed for my_tool."));
+        assert!(err_msg.contains(&format!("Expected: {}", old_sha256)));
+        assert!(err_msg.contains(&format!("Actual:   {}", new_sha256)));
+    }
+
+    #[test]
+    fn test_fetch_tool_multiple_urls_for_same_hash() {
+        let temp = tempdir().unwrap();
+        let temp_path = temp.path();
+        let fake_home = temp_path.join("fake_home");
+
+        let content = b"identical tool payload";
+        let sha256 = format!("{:x}", Sha256::digest(content));
+
+        let src1 = temp_path.join("src1");
+        fs::write(&src1, content).unwrap();
+        let url1 = format!("file://{}", src1.to_str().unwrap());
+
+        let src2 = temp_path.join("src2");
+        fs::write(&src2, content).unwrap();
+        let url2 = format!("file://{}", src2.to_str().unwrap());
+
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(&sha256);
+
+        // Fetch from url1
+        let res1 = fetch_tool("multi_tool", &url1, &sha256, None, &cache_dir);
+        assert!(res1.is_ok());
+
+        let url_file = fake_home.join(".cache/scrim/tools").join(format!("{}.url", sha256));
+        assert!(url_file.exists());
+        let file_content = fs::read_to_string(&url_file).unwrap();
+        assert!(file_content.contains(&url1));
+
+        // Fetch from url2 (mirror)
+        let res2 = fetch_tool("multi_tool", &url2, &sha256, None, &cache_dir);
+        assert!(res2.is_ok());
+
+        let updated_content = fs::read_to_string(&url_file).unwrap();
+        assert!(updated_content.contains(&url1));
+        assert!(updated_content.contains(&url2));
+
+        // Now remove src1 and src2 from disk to guarantee both URLs hit the cache without downloading
+        fs::remove_file(&src1).unwrap();
+        fs::remove_file(&src2).unwrap();
+
+        assert!(fetch_tool("multi_tool", &url1, &sha256, None, &cache_dir).is_ok());
+        assert!(fetch_tool("multi_tool", &url2, &sha256, None, &cache_dir).is_ok());
     }
 
     #[test]

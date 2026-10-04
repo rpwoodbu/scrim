@@ -1269,4 +1269,149 @@ tools:
     assert!(expected_cached_binary.exists());
 }
 
+#[test]
+fn test_e2e_url_aware_cache_invalidation_and_update_facilitation() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    // 1. Create v1 tool source
+    let v1_src = temp_path.join("v1_tool_src");
+    fs::write(&v1_src, "#!/bin/sh\necho \"Tool Version 1: args=$*\"\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&v1_src).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&v1_src, perms).unwrap();
+    }
+    let v1_sha256 = compute_sha256(&v1_src);
+    let v1_url = format!("file://{}", v1_src.to_str().unwrap());
+
+    // 2. Configure scrim.yaml with v1
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    let config_v1 = format!(
+        r#"
+telemetry: false
+tools:
+  mytool:
+    url: "{}"
+    sha256: "{}"
+"#,
+        v1_url, v1_sha256
+    );
+    fs::write(&scrim_yaml, config_v1).unwrap();
+
+    let shim_path = temp_path.join("mytool");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &shim_path).unwrap();
+
+    let cache_home = temp_path.join("fake_home");
+    fs::create_dir_all(&cache_home).unwrap();
+
+    // 3. First execution: downloads and caches v1
+    let output_v1 = Command::new(&shim_path)
+        .arg("hello")
+        .current_dir(temp_path)
+        .env("HOME", &cache_home)
+        .output()
+        .expect("Failed to execute shim for v1");
+    assert!(output_v1.status.success());
+    let stdout_v1 = String::from_utf8(output_v1.stdout).unwrap();
+    assert!(stdout_v1.contains("Tool Version 1: args=hello"));
+
+    let cache_tools = cache_home.join(".cache/scrim/tools");
+    let v1_cache_bin = cache_tools.join(&v1_sha256).join("mytool");
+    let v1_url_file = cache_tools.join(format!("{}.url", v1_sha256));
+    assert!(v1_cache_bin.exists());
+    assert!(v1_url_file.exists());
+    assert!(fs::read_to_string(&v1_url_file).unwrap().contains(&v1_url));
+
+    // 4. Second execution: hits cache for v1
+    let output_v1_cache = Command::new(&shim_path)
+        .arg("second")
+        .current_dir(temp_path)
+        .env("HOME", &cache_home)
+        .output()
+        .expect("Failed to execute cached shim for v1");
+    assert!(output_v1_cache.status.success());
+    let stdout_v1_cache = String::from_utf8(output_v1_cache.stdout).unwrap();
+    assert!(stdout_v1_cache.contains("Tool Version 1: args=second"));
+
+    // 5. Create v2 tool source
+    let v2_src = temp_path.join("v2_tool_src");
+    fs::write(&v2_src, "#!/bin/sh\necho \"Tool Version 2: args=$*\"\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&v2_src).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&v2_src, perms).unwrap();
+    }
+    let v2_sha256 = compute_sha256(&v2_src);
+    let v2_url = format!("file://{}", v2_src.to_str().unwrap());
+
+    // 6. User updates URL in scrim.yaml to v2, but does NOT update sha256 (still has v1_sha256)
+    let config_v2_stale_hash = format!(
+        r#"
+telemetry: false
+tools:
+  mytool:
+    url: "{}"
+    sha256: "{}"
+"#,
+        v2_url, v1_sha256
+    );
+    fs::write(&scrim_yaml, config_v2_stale_hash).unwrap();
+
+    // 7. Execution must NOT return the cached v1 binary.
+    // It must download v2, find that hash does not match v1_sha256, and report expected vs actual hash.
+    let output_mismatch = Command::new(&shim_path)
+        .arg("test")
+        .current_dir(temp_path)
+        .env("HOME", &cache_home)
+        .output()
+        .expect("Failed to run shim on URL bump with stale hash");
+    assert!(!output_mismatch.status.success());
+    let stderr_mismatch = String::from_utf8(output_mismatch.stderr).unwrap();
+    let stdout_mismatch = String::from_utf8(output_mismatch.stdout).unwrap();
+
+    // Crucially: Must NOT have run the cached v1 binary!
+    assert!(!stdout_mismatch.contains("Tool Version 1"));
+    // Error must report SHA256 mismatch with expected (v1) and actual (v2) hashes
+    assert!(stderr_mismatch.contains("SHA256 verification failed for mytool."));
+    assert!(stderr_mismatch.contains(&format!("Expected: {}", v1_sha256)));
+    assert!(stderr_mismatch.contains(&format!("Actual:   {}", v2_sha256)));
+
+    // 8. User updates sha256 in scrim.yaml to actual hash v2_sha256
+    let config_v2_correct = format!(
+        r#"
+telemetry: false
+tools:
+  mytool:
+    url: "{}"
+    sha256: "{}"
+"#,
+        v2_url, v2_sha256
+    );
+    fs::write(&scrim_yaml, config_v2_correct).unwrap();
+
+    // 9. Execution succeeds with v2
+    let output_v2 = Command::new(&shim_path)
+        .arg("v2_arg")
+        .current_dir(temp_path)
+        .env("HOME", &cache_home)
+        .output()
+        .expect("Failed to execute shim after updating sha256 to v2");
+    assert!(output_v2.status.success());
+    let stdout_v2 = String::from_utf8(output_v2.stdout).unwrap();
+    assert!(stdout_v2.contains("Tool Version 2: args=v2_arg"));
+
+    let v2_cache_bin = cache_tools.join(&v2_sha256).join("mytool");
+    let v2_url_file = cache_tools.join(format!("{}.url", v2_sha256));
+    assert!(v2_cache_bin.exists());
+    assert!(v2_url_file.exists());
+    assert!(fs::read_to_string(&v2_url_file).unwrap().contains(&v2_url));
+}
+
 
