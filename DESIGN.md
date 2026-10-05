@@ -15,7 +15,7 @@
 - **Performance**: The critical path (resolving and executing a tool) must be as close to zero-overhead as possible.
 - **Backward Compatibility**: Once Scrim reaches GA (v1), configuration and behavior MUST be backward-compatible, as Scrim is bootstrapping other tools.
 - **Transparency**: Users should interact with their tools normally; Scrim stays behind the curtain.
-- **Actionable UX**: Scrim must never fail silently; errors and progress must be explicit and clear.
+- **Actionable UX**: Usually Scrim is silent, but when messages are appropriate, they should be concise and helpful.
 - **Reliability**: Failures in telemetry or other auxiliary tasks must never block or prevent tool execution.
 - **YAGNI (You Aren't Gonna Need It)**: Favor simplicity and minimal configuration. Avoid preemptive abstractions until they are strictly required.
 - **DRY (Don't Repeat Yourself)**: Avoid duplicating logic or configuration; centralize shared behavior.
@@ -23,7 +23,7 @@
 
 ## UX
 
-- **Actionable**: Errors must be explicit and clear. Scrim must never fail silently.
+- **Actionable**: Errors must be explicit, clear, and provide enough context for the user to take corrective action. Scrim must never fail silently.
 - **Attribution**: All error output must clearly indicate that it originates from Scrim.
 - **Visibility**: Proactively inform the user during long-running operations (e.g., unpacking archives).
 
