@@ -5,7 +5,9 @@ use std::path::PathBuf;
 #[derive(Debug, PartialEq, Eq)]
 pub enum CliCommand {
     Version,
-    Config,
+    Config {
+        tool: Option<String>,
+    },
     Links {
         dir: Option<PathBuf>,
     },
@@ -30,9 +32,11 @@ pub fn build_cli() -> Command {
         .arg_required_else_help(true)
         .subcommand(Command::new("version").about("Displays the version of Scrim."))
         .subcommand(
-            Command::new("config").about(
-                "Reports the resultant aggregated configuration after resolving all configuration layers.",
-            ),
+            Command::new("config")
+                .about(
+                    "Reports the resultant aggregated configuration after resolving all configuration layers.",
+                )
+                .arg(Arg::new("tool").value_name("TOOL")),
         )
         .subcommand(
             Command::new("links")
@@ -61,7 +65,10 @@ where
     match cmd.try_get_matches_from(itr) {
         Ok(matches) => match matches.subcommand() {
             Some(("version", _)) => CliParseResult::Command(CliCommand::Version),
-            Some(("config", _)) => CliParseResult::Command(CliCommand::Config),
+            Some(("config", sub_matches)) => {
+                let tool = sub_matches.get_one::<String>("tool").cloned();
+                CliParseResult::Command(CliCommand::Config { tool })
+            }
             Some(("links", sub_matches)) => {
                 let dir = sub_matches.get_one::<String>("dir").map(PathBuf::from);
                 CliParseResult::Command(CliCommand::Links { dir })
@@ -140,8 +147,20 @@ mod tests {
     fn test_config_subcommand() {
         assert_eq!(
             parse_management_cli(["scrim", "config"]),
-            CliParseResult::Command(CliCommand::Config)
+            CliParseResult::Command(CliCommand::Config { tool: None })
         );
+        assert_eq!(
+            parse_management_cli(["scrim", "config", "node"]),
+            CliParseResult::Command(CliCommand::Config {
+                tool: Some("node".to_string())
+            })
+        );
+        match parse_management_cli(["scrim", "config", "node", "extra"]) {
+            CliParseResult::Error(err) => {
+                assert!(err.contains("unexpected argument 'extra'"));
+            }
+            other => panic!("Expected Error, got {:?}", other),
+        }
     }
 
     #[test]
@@ -226,6 +245,11 @@ mod tests {
         }
 
         match parse_management_cli(["scrim", "run", "node", "--foo"]) {
+            CliParseResult::Error(err) => assert!(err.contains("unexpected argument '--foo'")),
+            other => panic!("Expected Error, got {:?}", other),
+        }
+
+        match parse_management_cli(["scrim", "config", "--foo"]) {
             CliParseResult::Error(err) => assert!(err.contains("unexpected argument '--foo'")),
             other => panic!("Expected Error, got {:?}", other),
         }

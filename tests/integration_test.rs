@@ -834,6 +834,56 @@ tools:
     assert!(!stdout.contains("archive_path:"), "Unspecified archive_path should be omitted");
     assert!(!stdout.contains("template:"), "Unspecified template should be omitted");
 
+    // 4.1 Run with 'config demotool' to print only demotool's configuration
+    let output_tool = Command::new(&scrim_bin)
+        .arg("config")
+        .arg("demotool")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim config demotool");
+    assert!(output_tool.status.success());
+    let stdout_tool = String::from_utf8(output_tool.stdout).unwrap();
+    assert!(stdout_tool.contains("system_path: /bin/echo"));
+    assert!(!stdout_tool.contains("telemetry"), "Telemetry should not appear in tool config");
+    assert!(!stdout_tool.contains("demotool:"), "Tool name key should not wrap the tool config");
+    assert!(!stdout_tool.contains("tools:"), "Tools collection key should not appear in tool config");
+    assert!(!stdout_tool.contains("null"), "Output should not contain null entries");
+    assert!(!stdout_tool.contains("url:"), "Unspecified url should be omitted");
+
+    // 4.2 Run with 'config nonexistent' to verify error handling
+    let output_missing = Command::new(&scrim_bin)
+        .arg("config")
+        .arg("nonexistent")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim config nonexistent");
+    assert!(!output_missing.status.success());
+    let stderr_missing = String::from_utf8(output_missing.stderr).unwrap();
+    assert!(stderr_missing.contains("[Scrim] Error: Tool 'nonexistent' not found in config"));
+
+    // 4.3 Run with 'config demotool extra' to verify unexpected argument error
+    let output_extra = Command::new(&scrim_bin)
+        .arg("config")
+        .arg("demotool")
+        .arg("extra")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim config demotool extra");
+    assert!(!output_extra.status.success());
+    let stderr_extra = String::from_utf8(output_extra.stderr).unwrap();
+    assert!(stderr_extra.contains("[Scrim] Error: unexpected argument 'extra'"));
+
+    // 4.4 Run with 'config --undefined-flag' to verify undefined flag error
+    let output_conf_flag = Command::new(&scrim_bin)
+        .arg("config")
+        .arg("--undefined-flag")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim config --undefined-flag");
+    assert!(!output_conf_flag.status.success());
+    let stderr_conf_flag = String::from_utf8(output_conf_flag.stderr).unwrap();
+    assert!(stderr_conf_flag.contains("[Scrim] Error: unexpected argument '--undefined-flag'"));
+
     // 4.5 Run with 'config' on an empty config to verify empty collections are omitted
     std::fs::write(&scrim_yaml, "{}").unwrap();
     let output = Command::new(&scrim_bin)
@@ -1413,5 +1463,98 @@ tools:
     assert!(v2_url_file.exists());
     assert!(fs::read_to_string(&v2_url_file).unwrap().contains(&v2_url));
 }
+
+#[test]
+fn test_e2e_config_tool_argument() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    let config_content = r#"telemetry: true
+tools:
+  node:
+    system_path: /bin/node
+  go:
+    url: https://go.dev/dl/go1.21.5.linux-amd64.tar.gz
+    sha256: 285c1f0624022839446d32
+    archive_path: go/bin/go
+  gofmt:
+    template: go
+    archive_path: go/bin/gofmt
+"#;
+    fs::write(&scrim_yaml, config_content).unwrap();
+
+    // 1. Full config
+    let output_all = Command::new(&scrim_bin)
+        .arg("config")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim config");
+    assert!(output_all.status.success());
+    let stdout_all = String::from_utf8(output_all.stdout).unwrap();
+    assert!(stdout_all.contains("telemetry: true"));
+    assert!(stdout_all.contains("node:"));
+    assert!(stdout_all.contains("go:"));
+    assert!(stdout_all.contains("gofmt:"));
+
+    // 2. Specific tool: node
+    let output_node = Command::new(&scrim_bin)
+        .arg("config")
+        .arg("node")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim config node");
+    assert!(output_node.status.success());
+    let stdout_node = String::from_utf8(output_node.stdout).unwrap();
+    assert!(stdout_node.contains("system_path: /bin/node"));
+    assert!(!stdout_node.contains("telemetry"));
+    assert!(!stdout_node.contains("node:"));
+    assert!(!stdout_node.contains("go:"));
+    assert!(!stdout_node.contains("gofmt:"));
+
+    // 3. Specific tool: go
+    let output_go = Command::new(&scrim_bin)
+        .arg("config")
+        .arg("go")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim config go");
+    assert!(output_go.status.success());
+    let stdout_go = String::from_utf8(output_go.stdout).unwrap();
+    assert!(stdout_go.contains("url: https://go.dev/dl/go1.21.5.linux-amd64.tar.gz"));
+    assert!(stdout_go.contains("sha256: 285c1f0624022839446d32"));
+    assert!(stdout_go.contains("archive_path: go/bin/go"));
+    assert!(!stdout_go.contains("system_path"));
+    assert!(!stdout_go.contains("node:"));
+    assert!(!stdout_go.contains("gofmt:"));
+
+    // 4. Specific tool: gofmt
+    let output_gofmt = Command::new(&scrim_bin)
+        .arg("config")
+        .arg("gofmt")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim config gofmt");
+    assert!(output_gofmt.status.success());
+    let stdout_gofmt = String::from_utf8(output_gofmt.stdout).unwrap();
+    assert!(stdout_gofmt.contains("template: go"));
+    assert!(stdout_gofmt.contains("archive_path: go/bin/gofmt"));
+    assert!(!stdout_gofmt.contains("url:"));
+    assert!(!stdout_gofmt.contains("sha256:"));
+    assert!(!stdout_gofmt.contains("node:"));
+
+    // 5. Nonexistent tool
+    let output_missing = Command::new(&scrim_bin)
+        .arg("config")
+        .arg("python")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim config python");
+    assert!(!output_missing.status.success());
+    let stderr_missing = String::from_utf8(output_missing.stderr).unwrap();
+    assert!(stderr_missing.contains("[Scrim] Error: Tool 'python' not found in config"));
+}
+
 
 

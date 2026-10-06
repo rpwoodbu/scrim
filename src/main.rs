@@ -50,13 +50,29 @@ fn handle_management_command(args: &[std::ffi::OsString]) {
         scrim_lib::cli::CliParseResult::Command(scrim_lib::cli::CliCommand::Version) => {
             println!("{}", scrim_lib::format_version(BINARY_COMMIT));
         }
-        scrim_lib::cli::CliParseResult::Command(scrim_lib::cli::CliCommand::Config) => {
+        scrim_lib::cli::CliParseResult::Command(scrim_lib::cli::CliCommand::Config { tool }) => {
             let (config, _) = load_configuration();
-            match serde_yaml::to_string(&config) {
-                Ok(yaml) => print!("{}", yaml),
-                Err(e) => {
-                    scrim_lib::scrim_error!("Failed to serialize configuration: {}", e);
-                    std::process::exit(1);
+            if let Some(tool_name) = tool {
+                match config.tools.get(&tool_name) {
+                    Some(tool_config) => match serde_yaml::to_string(tool_config) {
+                        Ok(yaml) => print!("{}", yaml),
+                        Err(e) => {
+                            scrim_lib::scrim_error!("Failed to serialize configuration: {}", e);
+                            std::process::exit(1);
+                        }
+                    },
+                    None => {
+                        scrim_lib::scrim_error!("Tool '{}' not found in config", tool_name);
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                match serde_yaml::to_string(&config) {
+                    Ok(yaml) => print!("{}", yaml),
+                    Err(e) => {
+                        scrim_lib::scrim_error!("Failed to serialize configuration: {}", e);
+                        std::process::exit(1);
+                    }
                 }
             }
         }
