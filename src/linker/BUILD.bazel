@@ -1,0 +1,21 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "linker",
+    srcs = ["linker.rs"],
+    crate_root = "linker.rs",
+    edition = "2021",
+    visibility = ["//src/bin:__pkg__"],
+    deps = [
+        "//src/config",
+        "//src/logger",
+    ],
+)
+
+rust_test(
+    name = "linker_test",
+    crate = ":linker",
+    deps = [
+        "@crates//:tempfile",
+    ],
+)

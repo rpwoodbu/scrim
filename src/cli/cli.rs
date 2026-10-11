@@ -27,7 +27,7 @@ pub enum CliParseResult {
 pub fn build_cli() -> Command {
     Command::new("scrim")
         .about("Scrim: The transparent tool proxy.")
-        .version(crate::VERSION)
+        .version(version::VERSION)
         .subcommand_required(true)
         .arg_required_else_help(true)
         .subcommand(Command::new("version").about("Displays the version of Scrim."))

@@ -149,12 +149,13 @@ Telemetry is gathered to track tool usage patterns.
     - This ensures telemetry is completely decoupled from the tool's execution latency.
 
 ### Logging & User Communication
-Scrim avoids heavy external logging crates. Instead, it uses a lightweight, internal logging module (e.g., `src/logger.rs`) with custom macros (e.g., `scrim_error!`, `scrim_progress!`) to ensure consistent attribution.
+Scrim avoids heavy external logging crates. Instead, it uses a lightweight, internal logging module with custom macros (e.g., `scrim_error!`, `scrim_progress!`) to ensure consistent attribution.
 
 ## Build & Project Structure
 - Use Bazel with `rules_rust` for building the project.
 - **Static Linking via musl**: Bazel and `rules_rust` are configured to target `x86_64-unknown-linux-musl` to eliminate runtime dynamic C library dependencies and ensure universal portability across Linux distributions.
-- **Modular Build Files**: To maintain a clean architecture, avoid a single overarching `BUILD.bazel` file at the repository root. Prefer individual `BUILD.bazel` files distributed within each logical segment of the project.
+- **Modular Build Files & Packaging**: To maintain a clean architecture, avoid monolithic build files or libraries. Logical domains are partitioned into distinct Bazel packages with their own `BUILD.bazel` files.
+- **Visibility Protection**: Packages must enforce least privilege through Bazel target visibilities. Targets should only be visible to packages that strictly require them, protecting architectural boundaries from inappropriate coupling.
 - **Binary Version Stamping**: Release binaries are stamped with the Git commit hash using Bazel workspace status stamping (`--workspace_status_command`). A workspace status script (`tools/workspace_status.sh`) provides `STABLE_GIT_COMMIT`, which `rules_rust` embeds into the binary during stamped builds (`--stamp`). In unstamped builds, the commit hash is omitted.
 
 ### CI/CD
@@ -168,7 +169,7 @@ CI and releases are automated via GitHub Actions.
 
 ### Directory Layout
 The project enforces the following prescriptive layout:
-- `/src/`: Contains the core Rust source code and library logic.
+- `/src/`: Contains the executable binary target package (`/src/bin/`) and modular library subpackages corresponding to distinct architectural concerns (e.g., CLI parsing, configuration, fetching, linking, logging, resolution, telemetry, versioning).
 - `/tests/`: Contains standard unit and integration tests as well as validation tests for benchmarks thresholds.
     - Benchmark threshold tests must be marked as `manual` as they are not correctness tests and are subject to flakiness.
 - `/benches/`: Contains the statistical microbenchmark harness code.
@@ -189,7 +190,7 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
 - Benchmarks will be integrated into the Bazel build pipeline.
 
 ### Testing Strategy
-- **Unit Tests**: Every core module (resolution, parsing, environment handling) must have high test coverage.
+- **Unit Tests**: Every core module must have high test coverage, maintained via localized unit tests within each package.
 - **Integration Tests**: Bazel `sh_test` or `rust_test` targets that simulate:
     - Deeply nested project structures.
     - Missing configurations (falling back to global defaults).

@@ -1,0 +1,20 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "resolver",
+    srcs = ["resolver.rs"],
+    crate_root = "resolver.rs",
+    edition = "2021",
+    visibility = [
+        "//src/bin:__pkg__",
+        "//benches:__pkg__",
+    ],
+    deps = [
+        "//src/config",
+    ],
+)
+
+rust_test(
+    name = "resolver_test",
+    crate = ":resolver",
+)

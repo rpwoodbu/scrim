@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use crate::config::Config;
+use config::Config;
 
 #[derive(Debug, PartialEq)]
 pub enum Resolution {
@@ -83,7 +83,7 @@ pub fn resolve_tool(program_name: &str, config: Option<&Config>) -> Result<Optio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Config, ToolConfig};
+    use config::{Config, ToolConfig};
     use std::collections::HashMap;
 
     #[test]

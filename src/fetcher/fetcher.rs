@@ -112,7 +112,7 @@ pub fn fetch_tool(tool_name: &str, url: &str, sha256: &str, archive_path: Option
         let mut file = File::open(local_path)?;
         io::copy(&mut file, &mut hw)?;
     } else {
-        crate::scrim_progress!("Downloading {}...", tool_name);
+        logger::scrim_progress!("Downloading {}...", tool_name);
         let response = match ureq::get(url).call() {
             Ok(resp) => {
                 if !resp.status().is_success() {
@@ -134,7 +134,7 @@ pub fn fetch_tool(tool_name: &str, url: &str, sha256: &str, archive_path: Option
     }
 
     if is_archive {
-        crate::scrim_progress!("Unpacking {} archive...", tool_name);
+        logger::scrim_progress!("Unpacking {} archive...", tool_name);
         
         // Extract to a TempDir first to ensure atomicity
         let unpack_dir = tempfile::TempDir::new_in(tools_dir)?;

@@ -1,0 +1,27 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "fetcher",
+    srcs = ["fetcher.rs"],
+    crate_root = "fetcher.rs",
+    edition = "2021",
+    visibility = ["//src/bin:__pkg__"],
+    deps = [
+        "//src/logger",
+        "@crates//:flate2",
+        "@crates//:lzma-rs",
+        "@crates//:sha2",
+        "@crates//:tar",
+        "@crates//:tempfile",
+        "@crates//:ureq",
+        "@crates//:zip",
+    ],
+)
+
+rust_test(
+    name = "fetcher_test",
+    crate = ":fetcher",
+    deps = [
+        "@crates//:tempfile",
+    ],
+)

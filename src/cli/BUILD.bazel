@@ -1,0 +1,18 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "cli",
+    srcs = ["cli.rs"],
+    crate_root = "cli.rs",
+    edition = "2021",
+    visibility = ["//src/bin:__pkg__"],
+    deps = [
+        "//src/version",
+        "@crates//:clap",
+    ],
+)
+
+rust_test(
+    name = "cli_test",
+    crate = ":cli",
+)

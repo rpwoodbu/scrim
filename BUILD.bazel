@@ -1,6 +1,6 @@
 alias(
     name = "scrim",
-    actual = "//src:scrim",
+    actual = "//src/bin:scrim",
 )
 
 constraint_setting(

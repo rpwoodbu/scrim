@@ -6,7 +6,7 @@ use tempfile::tempdir;
 
 fn find_scrim_bin() -> PathBuf {
     if let Ok(runfiles_dir) = env::var("RUNFILES_DIR") {
-        let path = Path::new(&runfiles_dir).join("_main").join("src").join("scrim");
+        let path = Path::new(&runfiles_dir).join("_main").join("src").join("bin").join("scrim");
         if path.exists() {
             return path;
         }
@@ -21,7 +21,7 @@ fn find_scrim_bin() -> PathBuf {
         }
     }
     // 3. Fallback to standard bazel-bin
-    let path = PathBuf::from("bazel-bin/src/scrim");
+    let path = PathBuf::from("bazel-bin/src/bin/scrim");
     if path.exists() {
         return path;
     }
@@ -805,9 +805,9 @@ fn test_e2e_management_cli() {
         assert!(output.status.success());
         let stdout = String::from_utf8(output.stdout).unwrap();
         let trimmed = stdout.trim();
-        assert!(trimmed.starts_with(&format!("scrim {}", scrim_lib::VERSION)));
-        if trimmed != format!("scrim {}", scrim_lib::VERSION) {
-            assert!(trimmed.starts_with(&format!("scrim {} (", scrim_lib::VERSION)));
+        assert!(trimmed.starts_with(&format!("scrim {}", version::VERSION)));
+        if trimmed != format!("scrim {}", version::VERSION) {
+            assert!(trimmed.starts_with(&format!("scrim {} (", version::VERSION)));
             assert!(trimmed.ends_with(')'));
         }
     }

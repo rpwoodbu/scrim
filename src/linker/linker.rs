@@ -1,5 +1,5 @@
-use crate::config::Config;
-use crate::{scrim_error, scrim_progress};
+use config::Config;
+use logger::{scrim_error, scrim_progress};
 use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::{Component, Path, PathBuf};
@@ -161,7 +161,7 @@ pub fn create_links(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ToolConfig;
+    use config::ToolConfig;
     use std::collections::HashMap;
     use tempfile::tempdir;
 

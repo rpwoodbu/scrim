@@ -4,10 +4,15 @@ rust_binary(
     name = "scrim_bench",
     srcs = ["bench.rs"],
     edition = "2021",
+    rustc_flags = select({
+        "//:musl": ["-C", "relocation-model=static"],
+        "//conditions:default": [],
+    }),
     visibility = ["//visibility:public"],
-    data = ["//src:scrim"],
+    data = ["//src/bin:scrim"],
     deps = [
-        "//src:scrim_lib",
+        "//src/config",
+        "//src/resolver",
         "@crates//:criterion",
         "@crates//:tempfile",
     ],

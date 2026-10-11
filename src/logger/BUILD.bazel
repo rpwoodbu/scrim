@@ -1,0 +1,13 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+rust_library(
+    name = "logger",
+    srcs = ["logger.rs"],
+    crate_root = "logger.rs",
+    edition = "2021",
+    visibility = [
+        "//src/bin:__pkg__",
+        "//src/fetcher:__pkg__",
+        "//src/linker:__pkg__",
+    ],
+)

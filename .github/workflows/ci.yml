@@ -30,8 +30,8 @@ jobs:
 
       - name: Build release binary
         run: |
-          bazel build -c opt --stamp --remote_download_toplevel //src:scrim
-          cp bazel-bin/src/scrim scrim-linux-amd64
+          bazel build -c opt --stamp --remote_download_toplevel //src/bin:scrim
+          cp bazel-bin/src/bin/scrim scrim-linux-amd64
           chmod +x scrim-linux-amd64
 
       - name: Publish GitHub Release

@@ -1,0 +1,27 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "config",
+    srcs = ["config.rs"],
+    crate_root = "config.rs",
+    edition = "2021",
+    visibility = [
+        "//src/bin:__pkg__",
+        "//src/linker:__pkg__",
+        "//src/resolver:__pkg__",
+        "//benches:__pkg__",
+    ],
+    deps = [
+        "@crates//:serde",
+        "@crates//:serde_with",
+        "@crates//:serde_yaml",
+    ],
+)
+
+rust_test(
+    name = "config_test",
+    crate = ":config",
+    deps = [
+        "@crates//:tempfile",
+    ],
+)

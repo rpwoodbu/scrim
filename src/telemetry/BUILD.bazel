@@ -1,0 +1,12 @@
+load("@rules_rust//rust:defs.bzl", "rust_library")
+
+rust_library(
+    name = "telemetry",
+    srcs = ["telemetry.rs"],
+    crate_root = "telemetry.rs",
+    edition = "2021",
+    visibility = ["//src/bin:__pkg__"],
+    deps = [
+        "@crates//:chrono",
+    ],
+)

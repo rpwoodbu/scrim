@@ -1,16 +1,22 @@
-use scrim_lib::{config, fetcher, resolver, telemetry};
+use cli::{parse_management_cli, CliCommand, CliParseResult};
+use config::Config;
+use fetcher::fetch_tool;
+use linker::create_links;
+use logger::scrim_error;
+use resolver::{resolve_tool, Resolution};
+use telemetry::report_usage;
+use version::format_version;
 
 use std::env;
 use std::os::unix::process::CommandExt;
-use std::process::Command;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 fn main() {
     let args: Vec<std::ffi::OsString> = env::args_os().collect();
     if args.is_empty() {
         return;
     }
-
 
     let program_name = Path::new(&args[0])
         .file_name()
@@ -31,14 +37,13 @@ fn get_home_dir() -> Option<PathBuf> {
 
 const BINARY_COMMIT: Option<&str> = option_env!("SCRIM_GIT_COMMIT");
 
-
-fn load_configuration() -> (config::Config, Option<PathBuf>) {
+fn load_configuration() -> (Config, Option<PathBuf>) {
     let cwd = env::current_dir().expect("Failed to get current directory");
     let home_dir = get_home_dir();
     let config = match config::load_config(&cwd, home_dir.as_deref()) {
         Ok(c) => c,
         Err(e) => {
-            scrim_lib::scrim_error!("Failed to load configuration: {}", e);
+            scrim_error!("Failed to load configuration: {}", e);
             std::process::exit(1);
         }
     };
@@ -46,23 +51,23 @@ fn load_configuration() -> (config::Config, Option<PathBuf>) {
 }
 
 fn handle_management_command(args: &[std::ffi::OsString]) {
-    match scrim_lib::cli::parse_management_cli(args) {
-        scrim_lib::cli::CliParseResult::Command(scrim_lib::cli::CliCommand::Version) => {
-            println!("{}", scrim_lib::format_version(BINARY_COMMIT));
+    match parse_management_cli(args) {
+        CliParseResult::Command(CliCommand::Version) => {
+            println!("{}", format_version(BINARY_COMMIT));
         }
-        scrim_lib::cli::CliParseResult::Command(scrim_lib::cli::CliCommand::Config { tool }) => {
+        CliParseResult::Command(CliCommand::Config { tool }) => {
             let (config, _) = load_configuration();
             if let Some(tool_name) = tool {
                 match config.tools.get(&tool_name) {
                     Some(tool_config) => match serde_yaml::to_string(tool_config) {
                         Ok(yaml) => print!("{}", yaml),
                         Err(e) => {
-                            scrim_lib::scrim_error!("Failed to serialize configuration: {}", e);
+                            scrim_error!("Failed to serialize configuration: {}", e);
                             std::process::exit(1);
                         }
                     },
                     None => {
-                        scrim_lib::scrim_error!("Tool '{}' not found in config", tool_name);
+                        scrim_error!("Tool '{}' not found in config", tool_name);
                         std::process::exit(1);
                     }
                 }
@@ -70,49 +75,49 @@ fn handle_management_command(args: &[std::ffi::OsString]) {
                 match serde_yaml::to_string(&config) {
                     Ok(yaml) => print!("{}", yaml),
                     Err(e) => {
-                        scrim_lib::scrim_error!("Failed to serialize configuration: {}", e);
+                        scrim_error!("Failed to serialize configuration: {}", e);
                         std::process::exit(1);
                     }
                 }
             }
         }
-        scrim_lib::cli::CliParseResult::Command(scrim_lib::cli::CliCommand::Links { dir }) => {
+        CliParseResult::Command(CliCommand::Links { dir }) => {
             let dir_arg = match dir {
                 Some(ref d) => d.as_path(),
                 None => {
-                    scrim_lib::scrim_error!("directory argument required for links command");
+                    scrim_error!("directory argument required for links command");
                     std::process::exit(1);
                 }
             };
             let scrim_exe = match env::current_exe() {
                 Ok(exe) => exe,
                 Err(e) => {
-                    scrim_lib::scrim_error!("Failed to resolve current executable path: {}", e);
+                    scrim_error!("Failed to resolve current executable path: {}", e);
                     std::process::exit(1);
                 }
             };
             let (config, _) = load_configuration();
-            if let Err(e) = scrim_lib::linker::create_links(dir_arg, &scrim_exe, &config) {
-                scrim_lib::scrim_error!("{}", e);
+            if let Err(e) = create_links(dir_arg, &scrim_exe, &config) {
+                scrim_error!("{}", e);
                 std::process::exit(1);
             }
         }
-        scrim_lib::cli::CliParseResult::Command(scrim_lib::cli::CliCommand::Run { tool, args }) => {
+        CliParseResult::Command(CliCommand::Run { tool, args }) => {
             let tool_name = match tool {
                 Some(t) => t,
                 None => {
-                    scrim_lib::scrim_error!("tool name argument required for run command");
+                    scrim_error!("tool name argument required for run command");
                     std::process::exit(1);
                 }
             };
             execute_tool(&tool_name, &args);
         }
-        scrim_lib::cli::CliParseResult::Help(text) => {
+        CliParseResult::Help(text) => {
             print!("{}", text);
         }
-        scrim_lib::cli::CliParseResult::Error(err) => {
+        CliParseResult::Error(err) => {
             let trimmed_err = err.strip_prefix("error: ").unwrap_or(&err);
-            scrim_lib::scrim_error!("{}", trimmed_err);
+            scrim_error!("{}", trimmed_err);
             std::process::exit(1);
         }
     }
@@ -125,19 +130,32 @@ fn proxy_command(program_name: &str, args: &[std::ffi::OsString]) -> ! {
 
 fn execute_tool(program_name: &str, tool_args: &[std::ffi::OsString]) -> ! {
     let (config, home_dir) = load_configuration();
-    let resolution = resolver::resolve_tool(program_name, Some(&config));
+    let resolution = resolve_tool(program_name, Some(&config));
 
     match resolution {
         Ok(Some(res)) => {
             let target_path = match res {
-                resolver::Resolution::LocalPath(p) => p,
-                resolver::Resolution::Fetch { url, sha256, archive_path } => {
-                    let tools_dir = home_dir.as_ref().map(|h| h.join(".cache/scrim/tools")).unwrap_or_else(|| PathBuf::from(".cache/scrim/tools"));
+                Resolution::LocalPath(p) => p,
+                Resolution::Fetch {
+                    url,
+                    sha256,
+                    archive_path,
+                } => {
+                    let tools_dir = home_dir
+                        .as_ref()
+                        .map(|h| h.join(".cache/scrim/tools"))
+                        .unwrap_or_else(|| PathBuf::from(".cache/scrim/tools"));
                     let cache_dir = tools_dir.join(&sha256);
-                    match fetcher::fetch_tool(program_name, &url, &sha256, archive_path.as_deref(), &cache_dir) {
+                    match fetch_tool(
+                        program_name,
+                        &url,
+                        &sha256,
+                        archive_path.as_deref(),
+                        &cache_dir,
+                    ) {
                         Ok(p) => p,
                         Err(e) => {
-                            scrim_lib::scrim_error!("Failed to fetch tool '{}': {}", program_name, e);
+                            scrim_error!("Failed to fetch tool '{}': {}", program_name, e);
                             std::process::exit(1);
                         }
                     }
@@ -146,7 +164,7 @@ fn execute_tool(program_name: &str, tool_args: &[std::ffi::OsString]) -> ! {
 
             // Prepare the command
             let mut cmd = Command::new(&target_path);
-            
+
             // Pass through all arguments
             if !tool_args.is_empty() {
                 cmd.args(tool_args);
@@ -159,7 +177,7 @@ fn execute_tool(program_name: &str, tool_args: &[std::ffi::OsString]) -> ! {
                     let pid = libc::fork();
                     if pid == 0 {
                         // Child process: handle telemetry and exit
-                        telemetry::report_usage(program_name, &target_path);
+                        report_usage(program_name, &target_path);
                         libc::_exit(0);
                     }
                     // Parent process continues to exec
@@ -168,17 +186,17 @@ fn execute_tool(program_name: &str, tool_args: &[std::ffi::OsString]) -> ! {
 
             // Replace the current process with the target tool
             let err = cmd.exec();
-            
+
             // If exec returns, it failed
-            scrim_lib::scrim_error!("Failed to execute tool: {}", err);
+            scrim_error!("Failed to execute tool: {}", err);
             std::process::exit(1);
         }
         Ok(None) => {
-            scrim_lib::scrim_error!("Tool '{}' not found in config", program_name);
+            scrim_error!("Tool '{}' not found in config", program_name);
             std::process::exit(1);
         }
         Err(e) => {
-            scrim_lib::scrim_error!("{}", e);
+            scrim_error!("{}", e);
             std::process::exit(1);
         }
     }
