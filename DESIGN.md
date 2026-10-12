@@ -48,19 +48,31 @@ The `scrim config` command reports the resultant aggregated configuration after 
 - **Error Handling**:
   - Exits with non-zero status and an attributed error message if `<TOOL>` is provided but not found in the aggregated configuration (`[Scrim] Error: Tool '<TOOL>' not found in config`), or if invalid flags or additional arguments are provided.
 
-#### Links Command (`scrim links <DIR>`)
+#### Links Command (`scrim links [OPTIONS] <DIR>`)
 
-The `scrim links <DIR>` command creates or updates links in the specified directory `<DIR>` to point to the current `scrim` executable for all tools declared across resolved configuration layers.
+The `scrim links` command creates or updates links in the specified directory `<DIR>` to point to the current `scrim` executable for all tools declared across resolved configuration layers.
 
+- **Options**:
+  - `-n, --dry-run`: Performs a dry run without creating or removing any symlinks. Reports the actions that would be performed and exits with a status code indicating whether any modifications are needed. The exit code behavior is documented in the command's help message.
 - **Arguments**: `<DIR>` (path to directory where links should be created/updated).
 - **Behavior**:
   1. Resolves aggregated configuration across system, user, and workspace layers to get the set of defined tool names.
   2. Resolves the executable path of the current `scrim` binary.
-  3. For each tool in the aggregated configuration, creates a symbolic link at `<DIR>/<tool_name>` pointing to the relative path of the `scrim` binary and logs progress (skipping links that already point to the correct target). If an existing file or symlink pointing elsewhere is present, reports an error, skips it, and continues.
-  4. Scans `<DIR>` for any existing symbolic links pointing to the `scrim` binary whose command names are not in the aggregated tool configuration, removes them, and logs progress.
-  5. If all links are already correct, logs that fact.
-- **Error Handling**:
-  - Exits with non-zero status and an error message if `<DIR>` is omitted, if `<DIR>` does not exist or is not a directory, if the `scrim` executable path cannot be determined, if conflicting files or symlinks prevent link creation, or if filesystem operations fail.
+  3. In dry-run mode, logs that Scrim is updating links in dry-run mode (`[Scrim] Updating links in dry-run mode`).
+  4. For each tool in the aggregated configuration:
+     - If `<DIR>/<tool_name>` already exists as a symbolic link pointing to the relative path of the `scrim` binary, it is skipped.
+     - If an existing file or symlink pointing elsewhere is present, reports an error, skips it, and continues.
+     - Otherwise, in normal mode, creates a symbolic link at `<DIR>/<tool_name>` pointing to the relative path of the `scrim` binary and logs progress (`[Scrim] Linked <tool_name> -> <rel_path>`). In dry-run mode, logs what link would be created (`[Scrim] Would link <tool_name> -> <rel_path>`) without modifying the filesystem.
+  5. Scans `<DIR>` for any existing symbolic links pointing to the `scrim` binary whose command names are not in the aggregated tool configuration:
+     - In normal mode, removes the obsolete symlink and logs progress (`[Scrim] Removed obsolete link <file_name>`).
+     - In dry-run mode, logs what link would be removed (`[Scrim] Would remove obsolete link <file_name>`) without modifying the filesystem.
+  6. If all links are already correct and no changes would be made, logs that fact (`[Scrim] All links are correct`).
+- **Exit Status**:
+  - In normal mode: exits with status `0` on success.
+  - In dry-run mode:
+    - Exits with status `0` if all links are already correct (no changes would be made).
+    - Exits with status `2` if changes would have been made (links to create or obsolete links to remove).
+  - On error (in either mode): exits with non-zero status (`1`) and an error message if `<DIR>` is omitted, if `<DIR>` does not exist or is not a directory, if the `scrim` executable path cannot be determined, if conflicting files or symlinks prevent link creation, or if filesystem operations fail.
 
 #### Run Command (`scrim run <TOOL> [args...]`)
 

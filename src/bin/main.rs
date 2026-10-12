@@ -81,7 +81,7 @@ fn handle_management_command(args: &[std::ffi::OsString]) {
                 }
             }
         }
-        CliParseResult::Command(CliCommand::Links { dir }) => {
+        CliParseResult::Command(CliCommand::Links { dir, dry_run }) => {
             let dir_arg = match dir {
                 Some(ref d) => d.as_path(),
                 None => {
@@ -97,9 +97,16 @@ fn handle_management_command(args: &[std::ffi::OsString]) {
                 }
             };
             let (config, _) = load_configuration();
-            if let Err(e) = create_links(dir_arg, &scrim_exe, &config) {
-                scrim_error!("{}", e);
-                std::process::exit(1);
+            match create_links(dir_arg, &scrim_exe, &config, dry_run) {
+                Ok(modified) => {
+                    if dry_run && modified {
+                        std::process::exit(2);
+                    }
+                }
+                Err(e) => {
+                    scrim_error!("{}", e);
+                    std::process::exit(1);
+                }
             }
         }
         CliParseResult::Command(CliCommand::Run { tool, args }) => {

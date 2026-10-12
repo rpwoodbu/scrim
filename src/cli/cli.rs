@@ -10,6 +10,7 @@ pub enum CliCommand {
     },
     Links {
         dir: Option<PathBuf>,
+        dry_run: bool,
     },
     Run {
         tool: Option<String>,
@@ -41,6 +42,19 @@ pub fn build_cli() -> Command {
         .subcommand(
             Command::new("links")
                 .about("Updates links in a specified target directory for all defined tools.")
+                .after_help(
+                    "Exit codes in dry-run mode:\n  \
+                     0  All links are already correct (no changes needed)\n  \
+                     2  Changes would have been made\n  \
+                     1  An error occurred",
+                )
+                .arg(
+                    Arg::new("dry_run")
+                        .long("dry-run")
+                        .short('n')
+                        .action(clap::ArgAction::SetTrue)
+                        .help("Perform a dry run without modifying any links."),
+                )
                 .arg(Arg::new("dir").value_name("DIR")),
         )
         .subcommand(
@@ -71,7 +85,8 @@ where
             }
             Some(("links", sub_matches)) => {
                 let dir = sub_matches.get_one::<String>("dir").map(PathBuf::from);
-                CliParseResult::Command(CliCommand::Links { dir })
+                let dry_run = sub_matches.get_flag("dry_run");
+                CliParseResult::Command(CliCommand::Links { dir, dry_run })
             }
             Some(("run", sub_matches)) => {
                 let tool = sub_matches.get_one::<String>("tool").cloned();
@@ -133,6 +148,12 @@ mod tests {
             }
             other => panic!("Expected Help, got {:?}", other),
         }
+        match parse_management_cli(["scrim", "help", "links"]) {
+            CliParseResult::Help(text) => {
+                assert!(text.to_lowercase().contains("exit code"));
+            }
+            other => panic!("Expected Help, got {:?}", other),
+        }
     }
 
     #[test]
@@ -168,12 +189,51 @@ mod tests {
         assert_eq!(
             parse_management_cli(["scrim", "links", "/tmp/bin"]),
             CliParseResult::Command(CliCommand::Links {
-                dir: Some(PathBuf::from("/tmp/bin"))
+                dir: Some(PathBuf::from("/tmp/bin")),
+                dry_run: false,
+            })
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "links", "-n", "/tmp/bin"]),
+            CliParseResult::Command(CliCommand::Links {
+                dir: Some(PathBuf::from("/tmp/bin")),
+                dry_run: true,
+            })
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "links", "/tmp/bin", "-n"]),
+            CliParseResult::Command(CliCommand::Links {
+                dir: Some(PathBuf::from("/tmp/bin")),
+                dry_run: true,
+            })
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "links", "--dry-run", "/tmp/bin"]),
+            CliParseResult::Command(CliCommand::Links {
+                dir: Some(PathBuf::from("/tmp/bin")),
+                dry_run: true,
+            })
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "links", "/tmp/bin", "--dry-run"]),
+            CliParseResult::Command(CliCommand::Links {
+                dir: Some(PathBuf::from("/tmp/bin")),
+                dry_run: true,
             })
         );
         assert_eq!(
             parse_management_cli(["scrim", "links"]),
-            CliParseResult::Command(CliCommand::Links { dir: None })
+            CliParseResult::Command(CliCommand::Links {
+                dir: None,
+                dry_run: false,
+            })
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "links", "-n"]),
+            CliParseResult::Command(CliCommand::Links {
+                dir: None,
+                dry_run: true,
+            })
         );
     }
 

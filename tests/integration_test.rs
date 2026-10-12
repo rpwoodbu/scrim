@@ -1091,6 +1091,163 @@ tools:
 }
 
 #[test]
+fn test_e2e_links_dry_run() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    // 1. Missing directory argument with -n should fail with exit code 1
+    let output_no_args = Command::new(&scrim_bin)
+        .arg("links")
+        .arg("-n")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim links -n");
+    assert_eq!(output_no_args.status.code(), Some(1));
+    let stderr_no_args = String::from_utf8(output_no_args.stderr).unwrap();
+    assert!(stderr_no_args.contains("[Scrim] Error: directory argument required for links command"));
+
+    // 2. Non-existent directory with -n should fail with exit code 1
+    let non_existent_dir = temp_path.join("missing_dir");
+    let output_missing = Command::new(&scrim_bin)
+        .arg("links")
+        .arg("-n")
+        .arg(&non_existent_dir)
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim links -n missing_dir");
+    assert_eq!(output_missing.status.code(), Some(1));
+    let stderr_missing = String::from_utf8(output_missing.stderr).unwrap();
+    assert!(stderr_missing.contains("[Scrim] Error: Target directory"));
+
+    // 3. Setup target directory, config, and stale link
+    let target_bin = temp_path.join("bin");
+    fs::create_dir_all(&target_bin).unwrap();
+
+    let local_tool = temp_path.join("my_tool");
+    fs::write(&local_tool, "#!/bin/sh\necho \"Tool run: $*\"\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&local_tool).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&local_tool, perms).unwrap();
+    }
+
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    let config_content = format!(
+        r#"
+tools:
+  tool1:
+    system_path: "{}"
+"#,
+        local_tool.to_str().unwrap()
+    );
+    fs::write(&scrim_yaml, config_content).unwrap();
+
+    let stale_link = target_bin.join("obsolete_tool");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &stale_link).unwrap();
+
+    // 4. Run `scrim links -n <target_bin>`: changes would be made -> exit code 2
+    let output_dry_run_short = Command::new(&scrim_bin)
+        .arg("links")
+        .arg("-n")
+        .arg(&target_bin)
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim links -n <target_bin>");
+    assert_eq!(output_dry_run_short.status.code(), Some(2));
+    let stderr_dry_run_short = String::from_utf8(output_dry_run_short.stderr).unwrap();
+    assert!(stderr_dry_run_short.to_lowercase().contains("dry-run"));
+    assert!(stderr_dry_run_short.contains("[Scrim] Would link tool1"));
+    assert!(stderr_dry_run_short.contains("[Scrim] Would remove obsolete link obsolete_tool"));
+
+    // Verify filesystem was NOT modified
+    let tool1_link = target_bin.join("tool1");
+    assert!(!tool1_link.exists());
+    assert!(stale_link.exists());
+
+    // 5. Test with `--dry-run` long flag as well
+    let output_dry_run_long = Command::new(&scrim_bin)
+        .arg("links")
+        .arg("--dry-run")
+        .arg(&target_bin)
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim links --dry-run <target_bin>");
+    assert_eq!(output_dry_run_long.status.code(), Some(2));
+    let stderr_dry_run_long = String::from_utf8(output_dry_run_long.stderr).unwrap();
+    assert!(stderr_dry_run_long.contains("[Scrim] Would link tool1"));
+    assert!(stderr_dry_run_long.contains("[Scrim] Would remove obsolete link obsolete_tool"));
+
+    // 6. Run actual `scrim links <target_bin>` to apply changes
+    let output_actual = Command::new(&scrim_bin)
+        .arg("links")
+        .arg(&target_bin)
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run actual scrim links");
+    assert_eq!(output_actual.status.code(), Some(0));
+    let stderr_actual = String::from_utf8(output_actual.stderr).unwrap();
+    assert!(!stderr_actual.to_lowercase().contains("dry-run"));
+    assert!(tool1_link.exists());
+    assert!(!stale_link.exists());
+
+    // 7. Run `scrim links -n <target_bin>` when all links are already correct -> exit code 0
+    let output_dry_clean = Command::new(&scrim_bin)
+        .arg("links")
+        .arg("-n")
+        .arg(&target_bin)
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim links -n second time");
+    assert_eq!(output_dry_clean.status.code(), Some(0));
+    let stderr_dry_clean = String::from_utf8(output_dry_clean.stderr).unwrap();
+    assert!(stderr_dry_clean.contains("[Scrim] All links are correct"));
+    assert!(!stderr_dry_clean.contains("[Scrim] Would link tool1"));
+
+    // 8. Run `scrim links -n <target_bin>` with conflict -> exit code 1
+    let config_conflicts = format!(
+        r#"
+tools:
+  tool1:
+    system_path: "{}"
+  conflicting_tool:
+    system_path: "{}"
+"#,
+        local_tool.to_str().unwrap(),
+        local_tool.to_str().unwrap(),
+    );
+    fs::write(&scrim_yaml, config_conflicts).unwrap();
+    let conflict_file = target_bin.join("conflicting_tool");
+    fs::write(&conflict_file, "conflict content").unwrap();
+
+    let output_dry_conflict = Command::new(&scrim_bin)
+        .arg("links")
+        .arg("-n")
+        .arg(&target_bin)
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim links -n with conflicts");
+    assert_eq!(output_dry_conflict.status.code(), Some(1));
+    let stderr_dry_conflict = String::from_utf8(output_dry_conflict.stderr).unwrap();
+    assert!(stderr_dry_conflict.contains("[Scrim] Error: '"));
+    assert!(stderr_dry_conflict.contains("conflicting_tool' already exists"));
+    assert!(stderr_dry_conflict.contains("One or more links could not be created"));
+
+    // 9. Verify help message documents exit codes
+    let output_help = Command::new(&scrim_bin)
+        .arg("links")
+        .arg("--help")
+        .output()
+        .expect("Failed to run scrim links --help");
+    assert!(output_help.status.success());
+    let stdout_help = String::from_utf8(output_help.stdout).unwrap();
+    assert!(stdout_help.to_lowercase().contains("exit code"));
+}
+
+#[test]
 fn test_e2e_run_command() {
     let scrim_bin = find_scrim_bin();
     let temp = tempdir().unwrap();
