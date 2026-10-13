@@ -27,9 +27,9 @@
    ```bash
    sudo scrim links /usr/local/bin
    ```
-   > **Note on `sudo`:** `sudo` typically resets `$HOME` to `/root`. If you want `scrim links` to resolve your user configuration at `~/.config/scrim/scrim.yaml`, use the `-E` flag:
+   > **Note on `sudo`:** `sudo` typically resets `$HOME` to `/root`. If you want `scrim links` to resolve your user configuration at `~/.config/scrim/scrim.yaml`, preserve `HOME` explicitly:
    > ```bash
-   > sudo -E scrim links /usr/local/bin
+   > sudo --preserve-env=HOME scrim links /usr/local/bin
    > ```
 
 ## Configuration
