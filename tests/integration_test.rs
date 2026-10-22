@@ -37,6 +37,15 @@ fn compute_sha256(path: &Path) -> String {
     stdout.split_whitespace().next().unwrap().to_string()
 }
 
+fn compute_sha512(path: &Path) -> String {
+    let output = Command::new("sha512sum")
+        .arg(path)
+        .output()
+        .expect("Failed to run sha512sum");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    stdout.split_whitespace().next().unwrap().to_string()
+}
+
 #[test]
 fn test_e2e_symlink_and_fetch() {
     let scrim_bin = find_scrim_bin();
@@ -117,7 +126,7 @@ tools:
     // 5. Verify the tool was cached
     let expected_cache_path = cache_home
         .join(".cache/scrim/tools")
-        .join(&sha256)
+        .join(format!("sha256:{}", sha256))
         .join("demotool");
     assert!(expected_cache_path.exists(), "Cache path not populated!");
 
@@ -445,7 +454,7 @@ tools:
     // 6. Verify cache population
     let expected_cache_path = cache_home
         .join(".cache/scrim/tools")
-        .join(&sha256)
+        .join(format!("sha256:{}", sha256))
         .join("demotool");
     assert!(expected_cache_path.exists(), "HTTP cached path not populated!");
 }
@@ -549,7 +558,7 @@ tools:
     // 6. Verify cache population
     let expected_cache_path = cache_home
         .join(".cache/scrim/tools")
-        .join(&sha256)
+        .join(format!("sha256:{}", sha256))
         .join("demotool_ipv6");
     assert!(expected_cache_path.exists(), "HTTP cached path not populated!");
 }
@@ -1497,7 +1506,7 @@ tools:
 
     let expected_cached_binary = cache_home
         .join(".cache/scrim/tools")
-        .join(&fetch_sha256)
+        .join(format!("sha256:{}", fetch_sha256))
         .join("fetched_tool");
     assert!(expected_cached_binary.exists());
 }
@@ -1554,8 +1563,8 @@ tools:
     assert!(stdout_v1.contains("Tool Version 1: args=hello"));
 
     let cache_tools = cache_home.join(".cache/scrim/tools");
-    let v1_cache_bin = cache_tools.join(&v1_sha256).join("mytool");
-    let v1_url_file = cache_tools.join(format!("{}.url", v1_sha256));
+    let v1_cache_bin = cache_tools.join(format!("sha256:{}", v1_sha256)).join("mytool");
+    let v1_url_file = cache_tools.join(format!("sha256:{}.url", v1_sha256));
     assert!(v1_cache_bin.exists());
     assert!(v1_url_file.exists());
     assert!(fs::read_to_string(&v1_url_file).unwrap().contains(&v1_url));
@@ -1640,8 +1649,8 @@ tools:
     let stdout_v2 = String::from_utf8(output_v2.stdout).unwrap();
     assert!(stdout_v2.contains("Tool Version 2: args=v2_arg"));
 
-    let v2_cache_bin = cache_tools.join(&v2_sha256).join("mytool");
-    let v2_url_file = cache_tools.join(format!("{}.url", v2_sha256));
+    let v2_cache_bin = cache_tools.join(format!("sha256:{}", v2_sha256)).join("mytool");
+    let v2_url_file = cache_tools.join(format!("sha256:{}.url", v2_sha256));
     assert!(v2_cache_bin.exists());
     assert!(v2_url_file.exists());
     assert!(fs::read_to_string(&v2_url_file).unwrap().contains(&v2_url));
@@ -1794,7 +1803,7 @@ fn test_e2e_xdg_base_directory_config_and_cache() {
     assert!(stdout.contains("Tool Ran: args=arg_test"));
 
     // Tool should be cached under custom_xdg_cache/scrim/tools/<sha256>/mytool
-    let cached_bin = custom_xdg_cache.join("scrim/tools").join(&sha256).join("mytool");
+    let cached_bin = custom_xdg_cache.join("scrim/tools").join(format!("sha256:{}", sha256)).join("mytool");
     assert!(cached_bin.exists(), "Binary was not cached under XDG_CACHE_HOME/scrim!");
 
     // Neither fake_home/.cache nor fake_home/.config should exist
@@ -1850,7 +1859,7 @@ fn test_e2e_xdg_cache_home_fallback() {
         .expect("Failed to execute shim with XDG_CACHE_HOME");
 
     assert!(output1.status.success());
-    assert!(xdg_cache.join("scrim/tools").join(&sha256).join("mytool").exists());
+    assert!(xdg_cache.join("scrim/tools").join(format!("sha256:{}", sha256)).join("mytool").exists());
     assert!(!fake_home.join(".cache").exists());
 
     // Case 2: XDG_CACHE_HOME relative -> ignored per spec, falls back to HOME/.cache/scrim
@@ -1863,7 +1872,113 @@ fn test_e2e_xdg_cache_home_fallback() {
         .expect("Failed to execute shim with relative XDG_CACHE_HOME");
 
     assert!(output2.status.success());
-    assert!(fake_home.join(".cache/scrim/tools").join(&sha256).join("mytool").exists());
+    assert!(fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256)).join("mytool").exists());
+}
+
+#[test]
+fn test_e2e_fetch_with_sha512() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    // 1. Create a mock tool source binary/script
+    let mock_tool_src = temp_path.join("mock_tool_src_sha512");
+    fs::write(
+        &mock_tool_src,
+        "#!/bin/sh\necho \"Sha512 Tool Executed: args=$*\"\n",
+    )
+    .unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&mock_tool_src).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&mock_tool_src, perms).unwrap();
+    }
+
+    let sha512 = compute_sha512(&mock_tool_src);
+
+    // 2. Create scrim.yaml in the temp directory specifying sha512
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    let config_content = format!(
+        r#"
+telemetry: false
+tools:
+  demotool512:
+    url: "file://{}"
+    sha512: "{}"
+"#,
+        mock_tool_src.to_str().unwrap(),
+        sha512
+    );
+    fs::write(&scrim_yaml, config_content).unwrap();
+
+    let shim_path = temp_path.join("demotool512");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &shim_path).unwrap();
+
+    let fake_home = temp_path.join("fake_home");
+    fs::create_dir_all(&fake_home).unwrap();
+
+    let output = Command::new(&shim_path)
+        .arg("hello")
+        .arg("sha512")
+        .current_dir(temp_path)
+        .env("HOME", &fake_home)
+        .output()
+        .expect("Failed to execute demotool512 shim");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Sha512 Tool Executed: args=hello sha512"));
+
+    // Check cache directory has sha512:<hash>
+    let expected_cached_binary = fake_home
+        .join(".cache/scrim/tools")
+        .join(format!("sha512:{}", sha512))
+        .join("demotool512");
+    assert!(expected_cached_binary.exists(), "Cache path with sha512: not populated!");
+
+    let url_file = fake_home
+        .join(".cache/scrim/tools")
+        .join(format!("sha512:{}.url", sha512));
+    assert!(url_file.exists(), "URL file with sha512: not populated!");
+}
+
+#[test]
+fn test_e2e_digest_validation_errors() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    // Tool with both sha256 and sha512
+    fs::write(
+        &scrim_yaml,
+        r#"
+telemetry: false
+tools:
+  multi_digest:
+    url: "https://example.com/tool.tar.gz"
+    sha256: "abc"
+    sha512: "def"
+"#,
+    )
+    .unwrap();
+
+    let shim_path = temp_path.join("multi_digest");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &shim_path).unwrap();
+
+    let output = Command::new(&shim_path)
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to execute multi_digest shim");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("Exactly one digest algorithm must be specified"));
 }
 
 

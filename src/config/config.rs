@@ -9,6 +9,7 @@ pub struct ToolConfig {
     pub system_path: Option<String>,
     pub url: Option<String>,
     pub sha256: Option<String>,
+    pub sha512: Option<String>,
     pub archive_path: Option<String>,
     pub template: Option<String>,
 }

@@ -161,7 +161,7 @@ fn execute_tool(program_name: &str, tool_args: &[std::ffi::OsString], app_env: &
                 Resolution::LocalPath(p) => p,
                 Resolution::Fetch {
                     url,
-                    sha256,
+                    digest,
                     archive_path,
                 } => {
                     let base_cache = config::resolve_cache_dir(
@@ -169,11 +169,13 @@ fn execute_tool(program_name: &str, tool_args: &[std::ffi::OsString], app_env: &
                         app_env.home_dir.as_deref(),
                     );
                     let tools_dir = base_cache.join("tools");
-                    let cache_dir = tools_dir.join(&sha256);
+                    let cache_dir_name = format!("{}:{}", digest.algorithm.name(), digest.value);
+                    let cache_dir = tools_dir.join(cache_dir_name);
                     match fetch_tool(
                         program_name,
                         &url,
-                        &sha256,
+                        digest.algorithm.name(),
+                        &digest.value,
                         archive_path.as_deref(),
                         &cache_dir,
                     ) {

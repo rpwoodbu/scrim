@@ -1,10 +1,31 @@
 use std::path::PathBuf;
 use config::Config;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DigestAlgorithm {
+    Sha256,
+    Sha512,
+}
+
+impl DigestAlgorithm {
+    pub fn name(&self) -> &'static str {
+        match self {
+            DigestAlgorithm::Sha256 => "sha256",
+            DigestAlgorithm::Sha512 => "sha512",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Digest {
+    pub algorithm: DigestAlgorithm,
+    pub value: String,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Resolution {
     LocalPath(PathBuf),
-    Fetch { url: String, sha256: String, archive_path: Option<String> },
+    Fetch { url: String, digest: Digest, archive_path: Option<String> },
 }
 
 pub fn resolve_tool(program_name: &str, config: Option<&Config>) -> Result<Option<Resolution>, String> {
@@ -13,34 +34,42 @@ pub fn resolve_tool(program_name: &str, config: Option<&Config>) -> Result<Optio
             let has_system_path = tool_config.system_path.is_some();
             let has_url = tool_config.url.is_some();
             let has_sha256 = tool_config.sha256.is_some();
+            let has_sha512 = tool_config.sha512.is_some();
+            let has_digest = has_sha256 || has_sha512;
             let has_template = tool_config.template.is_some();
             let has_archive_path = tool_config.archive_path.is_some();
 
             // Rule 1: `system_path` is mutually exclusive with all fetch-related properties
-            if has_system_path && (has_url || has_sha256 || has_template || has_archive_path) {
+            if has_system_path && (has_url || has_digest || has_template || has_archive_path) {
                 return Err(format!("Tool '{}' specifies 'system_path' which is mutually exclusive with fetch-related properties.", program_name));
             }
 
-            // Rule 2: `template` is mutually exclusive with `url` and `sha256`
-            if has_template && (has_url || has_sha256) {
-                return Err(format!("Tool '{}' specifies 'template' which is mutually exclusive with 'url' and 'sha256'.", program_name));
+            // Rule 2: `template` is mutually exclusive with `url` and digests
+            if has_template && (has_url || has_digest) {
+                return Err(format!("Tool '{}' specifies 'template' which is mutually exclusive with 'url' and digests.", program_name));
             }
 
-            // Rule 3: `url` and `sha256` must both be present or both absent
-            if has_url != has_sha256 {
-                return Err(format!("Tool '{}' specifies '{}' without '{}'. Both must be provided together.", 
-                    program_name, 
-                    if has_url { "url" } else { "sha256" },
-                    if has_url { "sha256" } else { "url" }
-                ));
+            // Rule 3: digests are mutually exclusive
+            if has_sha256 && has_sha512 {
+                return Err(format!("Tool '{}' specifies multiple digests. Exactly one digest algorithm must be specified.", program_name));
             }
 
-            // Rule 4: `archive_path` requires `url` or `template`
+            // Rule 4: `url` and digest must both be present or both absent
+            if has_url != has_digest {
+                if has_url {
+                    return Err(format!("Tool '{}' specifies 'url' without a digest. Both must be provided together.", program_name));
+                } else {
+                    let digest_name = if has_sha256 { "sha256" } else { "sha512" };
+                    return Err(format!("Tool '{}' specifies '{}' without 'url'. Both must be provided together.", program_name, digest_name));
+                }
+            }
+
+            // Rule 5: `archive_path` requires `url` or `template`
             if has_archive_path && !has_url && !has_template {
                 return Err(format!("Tool '{}' specifies 'archive_path' but provides no 'url' or 'template'.", program_name));
             }
 
-            // Rule 5: Empty tool configurations are invalid
+            // Rule 6: Empty tool configurations are invalid
             if !has_system_path && !has_url && !has_template {
                 return Err(format!("Tool '{}' has an empty configuration. Every tool must specify a 'system_path', 'url', or 'template'.", program_name));
             }
@@ -50,13 +79,25 @@ pub fn resolve_tool(program_name: &str, config: Option<&Config>) -> Result<Optio
             }
 
             let mut resolved_url = tool_config.url.clone();
-            let mut resolved_sha256 = tool_config.sha256.clone();
+            let mut resolved_digest = if let Some(v) = &tool_config.sha256 {
+                Some(Digest { algorithm: DigestAlgorithm::Sha256, value: v.clone() })
+            } else if let Some(v) = &tool_config.sha512 {
+                Some(Digest { algorithm: DigestAlgorithm::Sha512, value: v.clone() })
+            } else {
+                None
+            };
 
             if let Some(template_name) = &tool_config.template {
                 if let Some(template_config) = config.tools.get(template_name) {
                     if template_config.template.is_none() {
                         resolved_url = template_config.url.clone();
-                        resolved_sha256 = template_config.sha256.clone();
+                        resolved_digest = if let Some(v) = &template_config.sha256 {
+                            Some(Digest { algorithm: DigestAlgorithm::Sha256, value: v.clone() })
+                        } else if let Some(v) = &template_config.sha512 {
+                            Some(Digest { algorithm: DigestAlgorithm::Sha512, value: v.clone() })
+                        } else {
+                            None
+                        };
                     } else {
                         return Err(format!("Tool '{}' references template '{}', which is also a template. Template chaining is not allowed.", program_name, template_name));
                     }
@@ -65,10 +106,10 @@ pub fn resolve_tool(program_name: &str, config: Option<&Config>) -> Result<Optio
                 }
             }
 
-            if let (Some(url), Some(sha256)) = (resolved_url, resolved_sha256) {
+            if let (Some(url), Some(digest)) = (resolved_url, resolved_digest) {
                 return Ok(Some(Resolution::Fetch { 
                     url, 
-                    sha256,
+                    digest,
                     archive_path: tool_config.archive_path.clone(),
                 }));
             } else if has_archive_path {
@@ -93,6 +134,7 @@ mod tests {
             system_path: Some("/usr/bin/node".to_string()),
             url: None,
             sha256: None,
+            sha512: None,
             archive_path: None,
             template: None,
         });
@@ -107,12 +149,13 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_fetch() {
+    fn test_resolve_fetch_sha256() {
         let mut tools = BTreeMap::new();
         tools.insert("go".to_string(), ToolConfig {
             system_path: None,
             url: Some("https://go.dev/dl/go.tar.gz".to_string()),
             sha256: Some("abc12345".to_string()),
+            sha512: None,
             archive_path: None,
             template: None,
         });
@@ -121,7 +164,28 @@ mod tests {
         let resolved = resolve_tool("go", Some(&config));
         assert_eq!(resolved, Ok(Some(Resolution::Fetch { 
             url: "https://go.dev/dl/go.tar.gz".to_string(),
-            sha256: "abc12345".to_string(),
+            digest: Digest { algorithm: DigestAlgorithm::Sha256, value: "abc12345".to_string() },
+            archive_path: None,
+        })));
+    }
+
+    #[test]
+    fn test_resolve_fetch_sha512() {
+        let mut tools = BTreeMap::new();
+        tools.insert("go".to_string(), ToolConfig {
+            system_path: None,
+            url: Some("https://go.dev/dl/go.tar.gz".to_string()),
+            sha256: None,
+            sha512: Some("def67890".to_string()),
+            archive_path: None,
+            template: None,
+        });
+        let config = Config { tools, telemetry: Some(true), ..Default::default() };
+
+        let resolved = resolve_tool("go", Some(&config));
+        assert_eq!(resolved, Ok(Some(Resolution::Fetch { 
+            url: "https://go.dev/dl/go.tar.gz".to_string(),
+            digest: Digest { algorithm: DigestAlgorithm::Sha512, value: "def67890".to_string() },
             archive_path: None,
         })));
     }
@@ -133,6 +197,7 @@ mod tests {
             system_path: None,
             url: Some("https://go.dev/dl/go.tar.gz".to_string()),
             sha256: Some("abc12345".to_string()),
+            sha512: None,
             archive_path: Some("go/bin/go".to_string()),
             template: None,
         });
@@ -140,6 +205,7 @@ mod tests {
             system_path: None,
             url: None,
             sha256: None,
+            sha512: None,
             archive_path: Some("go/bin/gofmt".to_string()),
             template: Some("go".to_string()),
         });
@@ -148,7 +214,7 @@ mod tests {
         let resolved = resolve_tool("gofmt", Some(&config));
         assert_eq!(resolved, Ok(Some(Resolution::Fetch { 
             url: "https://go.dev/dl/go.tar.gz".to_string(),
-            sha256: "abc12345".to_string(),
+            digest: Digest { algorithm: DigestAlgorithm::Sha256, value: "abc12345".to_string() },
             archive_path: Some("go/bin/gofmt".to_string()),
         })));
     }
@@ -160,6 +226,7 @@ mod tests {
             system_path: None,
             url: Some("https://go.dev/dl/go.tar.gz".to_string()),
             sha256: Some("abc12345".to_string()),
+            sha512: None,
             archive_path: Some("go/bin/go".to_string()),
             template: None,
         });
@@ -167,6 +234,7 @@ mod tests {
             system_path: None,
             url: None,
             sha256: None,
+            sha512: None,
             archive_path: Some("go/bin/gofmt".to_string()),
             template: Some("go".to_string()),
         });
@@ -174,6 +242,7 @@ mod tests {
             system_path: None,
             url: None,
             sha256: None,
+            sha512: None,
             archive_path: Some("go/bin/go-chained".to_string()),
             template: Some("gofmt".to_string()),
         });
@@ -191,6 +260,7 @@ mod tests {
             system_path: Some("/bin/node".to_string()),
             url: Some("http://example.com/node.tar.gz".to_string()),
             sha256: None,
+            sha512: None,
             archive_path: None,
             template: None,
         });
@@ -199,14 +269,34 @@ mod tests {
             system_path: None,
             url: Some("http://example.com".to_string()),
             sha256: None,
+            sha512: None,
             archive_path: None,
             template: Some("go".to_string()),
         });
-        // Missing sha256
+        // Missing digest
         tools.insert("err_sha".to_string(), ToolConfig {
             system_path: None,
             url: Some("http://example.com".to_string()),
             sha256: None,
+            sha512: None,
+            archive_path: None,
+            template: None,
+        });
+        // Multiple digests
+        tools.insert("err_multi_digest".to_string(), ToolConfig {
+            system_path: None,
+            url: Some("http://example.com".to_string()),
+            sha256: Some("sha256val".to_string()),
+            sha512: Some("sha512val".to_string()),
+            archive_path: None,
+            template: None,
+        });
+        // Digest without url
+        tools.insert("err_digest_no_url".to_string(), ToolConfig {
+            system_path: None,
+            url: None,
+            sha256: None,
+            sha512: Some("sha512val".to_string()),
             archive_path: None,
             template: None,
         });
@@ -215,6 +305,7 @@ mod tests {
             system_path: None,
             url: None,
             sha256: None,
+            sha512: None,
             archive_path: Some("bin/foo".to_string()),
             template: None,
         });
@@ -223,6 +314,7 @@ mod tests {
             system_path: None,
             url: None,
             sha256: None,
+            sha512: None,
             archive_path: Some("bin/foo".to_string()),
             template: Some("local_tool".to_string()),
         });
@@ -230,6 +322,7 @@ mod tests {
             system_path: Some("/bin/local".to_string()),
             url: None,
             sha256: None,
+            sha512: None,
             archive_path: None,
             template: None,
         });
@@ -242,11 +335,19 @@ mod tests {
         );
         assert_eq!(
             resolve_tool("err_template", Some(&config)),
-            Err("Tool 'err_template' specifies 'template' which is mutually exclusive with 'url' and 'sha256'.".to_string())
+            Err("Tool 'err_template' specifies 'template' which is mutually exclusive with 'url' and digests.".to_string())
         );
         assert_eq!(
             resolve_tool("err_sha", Some(&config)),
-            Err("Tool 'err_sha' specifies 'url' without 'sha256'. Both must be provided together.".to_string())
+            Err("Tool 'err_sha' specifies 'url' without a digest. Both must be provided together.".to_string())
+        );
+        assert_eq!(
+            resolve_tool("err_multi_digest", Some(&config)),
+            Err("Tool 'err_multi_digest' specifies multiple digests. Exactly one digest algorithm must be specified.".to_string())
+        );
+        assert_eq!(
+            resolve_tool("err_digest_no_url", Some(&config)),
+            Err("Tool 'err_digest_no_url' specifies 'sha512' without 'url'. Both must be provided together.".to_string())
         );
         assert_eq!(
             resolve_tool("err_archive", Some(&config)),
@@ -262,6 +363,7 @@ mod tests {
             system_path: None,
             url: None,
             sha256: None,
+            sha512: None,
             archive_path: None,
             template: None,
         });
