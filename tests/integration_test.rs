@@ -785,6 +785,9 @@ fn test_e2e_management_cli() {
     let stdout_help_flag = String::from_utf8(output_help_flag.stdout).unwrap();
     assert!(stdout_help_flag.contains("Scrim: The transparent tool proxy."));
     assert!(stdout_help_flag.contains("Commands:"));
+    assert!(stdout_help_flag.contains("Environment Variables:"));
+    assert!(stdout_help_flag.contains("XDG_CACHE_HOME"));
+    assert!(stdout_help_flag.contains("XDG_CONFIG_HOME"));
 
     let output_h_flag = Command::new(&scrim_bin)
         .arg("-h")
@@ -1711,6 +1714,133 @@ tools:
     assert!(!output_missing.status.success());
     let stderr_missing = String::from_utf8(output_missing.stderr).unwrap();
     assert!(stderr_missing.contains("[Scrim] Error: Tool 'python' not found in config"));
+}
+
+#[test]
+fn test_e2e_xdg_base_directory_config_and_cache() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    // 1. Create mock tool
+    let tool_src = temp_path.join("tool_src");
+    fs::write(&tool_src, "#!/bin/sh\necho \"Tool Ran: args=$*\"\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&tool_src).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&tool_src, perms).unwrap();
+    }
+    let sha256 = compute_sha256(&tool_src);
+    let tool_url = format!("file://{}", tool_src.to_str().unwrap());
+
+    let fake_home = temp_path.join("fake_home");
+    let custom_xdg_config = temp_path.join("custom_xdg_config");
+    let custom_xdg_cache = temp_path.join("custom_xdg_cache");
+    fs::create_dir_all(&fake_home).unwrap();
+
+    // 2. Put user config under <custom_xdg_config>/scrim/scrim.yaml
+    let custom_scrim_dir = custom_xdg_config.join("scrim");
+    fs::create_dir_all(&custom_scrim_dir).unwrap();
+    fs::write(
+        custom_scrim_dir.join("scrim.yaml"),
+        format!(
+            "telemetry: false\ntools:\n  mytool:\n    url: \"{}\"\n    sha256: \"{}\"\n",
+            tool_url, sha256
+        ),
+    )
+    .unwrap();
+
+    let shim_path = temp_path.join("mytool");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &shim_path).unwrap();
+
+    // Execute with custom XDG_CONFIG_HOME and XDG_CACHE_HOME
+    let output = Command::new(&shim_path)
+        .arg("arg_test")
+        .current_dir(temp_path)
+        .env("HOME", &fake_home)
+        .env("XDG_CONFIG_HOME", &custom_xdg_config)
+        .env("XDG_CACHE_HOME", &custom_xdg_cache)
+        .output()
+        .expect("Failed to execute shim with custom XDG dirs");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Tool Ran: args=arg_test"));
+
+    // Tool should be cached under custom_xdg_cache/scrim/tools/<sha256>/mytool
+    let cached_bin = custom_xdg_cache.join("scrim/tools").join(&sha256).join("mytool");
+    assert!(cached_bin.exists(), "Binary was not cached under XDG_CACHE_HOME/scrim!");
+
+    // Neither fake_home/.cache nor fake_home/.config should exist
+    assert!(!fake_home.join(".cache").exists());
+    assert!(!fake_home.join(".config").exists());
+}
+
+#[test]
+fn test_e2e_xdg_cache_home_fallback() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    // 1. Create mock tool
+    let tool_src = temp_path.join("tool_src");
+    fs::write(&tool_src, "#!/bin/sh\necho \"Tool Ran: args=$*\"\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&tool_src).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&tool_src, perms).unwrap();
+    }
+    let sha256 = compute_sha256(&tool_src);
+    let tool_url = format!("file://{}", tool_src.to_str().unwrap());
+
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    fs::write(
+        &scrim_yaml,
+        format!(
+            "telemetry: false\ntools:\n  mytool:\n    url: \"{}\"\n    sha256: \"{}\"\n",
+            tool_url, sha256
+        ),
+    )
+    .unwrap();
+
+    let shim_path = temp_path.join("mytool");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &shim_path).unwrap();
+
+    let fake_home = temp_path.join("fake_home");
+    fs::create_dir_all(&fake_home).unwrap();
+
+    let xdg_cache = temp_path.join("xdg_cache_root");
+
+    // Case 1: XDG_CACHE_HOME set -> XDG_CACHE_HOME/scrim
+    let output1 = Command::new(&shim_path)
+        .arg("arg1")
+        .current_dir(temp_path)
+        .env("HOME", &fake_home)
+        .env("XDG_CACHE_HOME", &xdg_cache)
+        .output()
+        .expect("Failed to execute shim with XDG_CACHE_HOME");
+
+    assert!(output1.status.success());
+    assert!(xdg_cache.join("scrim/tools").join(&sha256).join("mytool").exists());
+    assert!(!fake_home.join(".cache").exists());
+
+    // Case 2: XDG_CACHE_HOME relative -> ignored per spec, falls back to HOME/.cache/scrim
+    let output2 = Command::new(&shim_path)
+        .arg("arg2")
+        .current_dir(temp_path)
+        .env("HOME", &fake_home)
+        .env("XDG_CACHE_HOME", "relative_xdg_cache")
+        .output()
+        .expect("Failed to execute shim with relative XDG_CACHE_HOME");
+
+    assert!(output2.status.success());
+    assert!(fake_home.join(".cache/scrim/tools").join(&sha256).join("mytool").exists());
 }
 
 

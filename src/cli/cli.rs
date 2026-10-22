@@ -29,6 +29,11 @@ pub fn build_cli() -> Command {
     Command::new("scrim")
         .about("Scrim: The transparent tool proxy.")
         .version(version::VERSION)
+        .after_help(
+            "Environment Variables:\n  \
+             XDG_CACHE_HOME   Base directory for user-specific cache files (default: $HOME/.cache)\n  \
+             XDG_CONFIG_HOME  Base directory for user-specific configuration files (default: $HOME/.config)",
+        )
         .subcommand_required(true)
         .arg_required_else_help(true)
         .subcommand(Command::new("version").about("Displays the version of Scrim."))
@@ -119,6 +124,21 @@ mod tests {
             CliParseResult::Help(text) => {
                 assert!(text.contains("Scrim: The transparent tool proxy."));
                 assert!(text.contains("Commands:"));
+                assert!(text.contains("Environment Variables:"));
+                assert!(text.contains("XDG_CACHE_HOME"));
+                assert!(text.contains("XDG_CONFIG_HOME"));
+            }
+            other => panic!("Expected Help, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_main_help_flag_shows_environment_variables() {
+        match parse_management_cli(["scrim", "--help"]) {
+            CliParseResult::Help(text) => {
+                assert!(text.contains("Environment Variables:"));
+                assert!(text.contains("XDG_CACHE_HOME"));
+                assert!(text.contains("XDG_CONFIG_HOME"));
             }
             other => panic!("Expected Help, got {:?}", other),
         }

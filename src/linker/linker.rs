@@ -232,6 +232,7 @@ mod tests {
         let config = Config {
             telemetry: None,
             tools,
+            ..Default::default()
         };
 
         let modified = create_links(&bin_dir, &scrim_exe, &config, false).unwrap();
@@ -278,6 +279,7 @@ mod tests {
         let config = Config {
             telemetry: None,
             tools,
+            ..Default::default()
         };
 
         // In dry run, modified should be true (needs to link node and remove oldtool)
@@ -324,6 +326,7 @@ mod tests {
         let config = Config {
             telemetry: None,
             tools,
+            ..Default::default()
         };
 
         // Execution should return error because node and go could not be linked

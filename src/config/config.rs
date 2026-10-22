@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[serde_with::skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -37,7 +37,11 @@ impl Config {
     }
 }
 
-pub fn load_config(start_path: &Path, home_dir: Option<&Path>) -> Result<Config, Box<dyn std::error::Error>> {
+pub fn load_config(
+    start_path: &Path,
+    home_dir: Option<&Path>,
+    xdg_config_env: Option<&Path>,
+) -> Result<Config, Box<dyn std::error::Error>> {
     let mut config = Config::default();
 
     // 1. System-Level Configuration
@@ -47,13 +51,12 @@ pub fn load_config(start_path: &Path, home_dir: Option<&Path>) -> Result<Config,
         config = config.merge(c);
     }
 
-    // 2. User-Level Configuration
-    if let Some(home) = home_dir {
-        let user_config_path = Path::new(home).join(".config/scrim/scrim.yaml");
-        if user_config_path.exists() {
-            let c = read_config(&user_config_path)?;
-            config = config.merge(c);
-        }
+    // 2. User-Level Configuration (XDG Base Directory Specification)
+    let user_config_dir = resolve_config_dir(xdg_config_env, home_dir);
+    let user_config_path = user_config_dir.join("scrim/scrim.yaml");
+    if user_config_path.exists() {
+        let c = read_config(&user_config_path)?;
+        config = config.merge(c);
     }
 
     // 3. Recursive Search
@@ -91,6 +94,41 @@ pub fn read_config(path: &Path) -> Result<Config, Box<dyn std::error::Error>> {
     Ok(config)
 }
 
+pub fn resolve_config_dir(xdg_config_env: Option<&Path>, home_dir: Option<&Path>) -> PathBuf {
+    if let Some(xdg_path) = xdg_config_env {
+        if xdg_path.is_absolute() {
+            return xdg_path.to_path_buf();
+        }
+    }
+
+    if let Some(home) = home_dir {
+        home.join(".config")
+    } else {
+        PathBuf::from(".config")
+    }
+}
+
+pub fn resolve_cache_dir(
+    xdg_cache_env: Option<&Path>,
+    home_dir: Option<&Path>,
+) -> PathBuf {
+    let base_cache = if let Some(xdg_path) = xdg_cache_env {
+        if xdg_path.is_absolute() {
+            xdg_path.to_path_buf()
+        } else if let Some(home) = home_dir {
+            home.join(".cache")
+        } else {
+            PathBuf::from(".cache")
+        }
+    } else if let Some(home) = home_dir {
+        home.join(".cache")
+    } else {
+        PathBuf::from(".cache")
+    };
+
+    base_cache.join("scrim")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,7 +141,7 @@ mod tests {
         let config_path = dir.path().join("scrim.yaml");
         fs::write(&config_path, "{}").unwrap();
 
-        let config = load_config(dir.path(), Some(dir.path())).unwrap();
+        let config = load_config(dir.path(), Some(dir.path()), None).unwrap();
         assert!(config.tools.is_empty());
     }
 
@@ -122,7 +160,7 @@ mod tests {
         let child_config_path = child.join("scrim.yaml");
         fs::write(&child_config_path, "telemetry: true\ntools:\n  foo: { system_path: '/bin/child_foo' }").unwrap();
 
-        let config = load_config(&child, Some(root.path())).unwrap();
+        let config = load_config(&child, Some(root.path()), None).unwrap();
         
         // Child wins for telemetry
         assert_eq!(config.telemetry, Some(true));
@@ -138,7 +176,7 @@ mod tests {
     fn test_load_config_not_found() {
         let dir = tempdir().unwrap();
         
-        let config = load_config(dir.path(), Some(dir.path())).unwrap();
+        let config = load_config(dir.path(), Some(dir.path()), None).unwrap();
         assert!(config.tools.is_empty());
     }
 
@@ -158,7 +196,7 @@ mod tests {
         fs::create_dir_all(&child).unwrap();
 
         // Should return empty because it stops at .git and doesn't see outside config
-        let config = load_config(&child, Some(root.path())).unwrap();
+        let config = load_config(&child, Some(root.path()), None).unwrap();
         assert!(!config.tools.contains_key("outside"));
     }
 
@@ -205,5 +243,126 @@ tools:
         let config: Config = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.telemetry, None);
         assert_eq!(config.telemetry_enabled(), false);
+    }
+
+    #[test]
+    fn test_load_config_xdg_config_home() {
+        let root = tempdir().unwrap();
+        let fake_home = root.path().join("fake_home");
+        let fake_xdg = root.path().join("custom_xdg_config");
+        let project_dir = root.path().join("project");
+        fs::create_dir_all(&fake_home).unwrap();
+        fs::create_dir_all(&project_dir).unwrap();
+
+        // 1. When XDG_CONFIG_HOME is set and absolute, it loads <XDG_CONFIG_HOME>/scrim/scrim.yaml
+        let xdg_scrim_dir = fake_xdg.join("scrim");
+        fs::create_dir_all(&xdg_scrim_dir).unwrap();
+        fs::write(
+            xdg_scrim_dir.join("scrim.yaml"),
+            "tools:\n  from_xdg: { system_path: '/bin/from_xdg' }",
+        )
+        .unwrap();
+
+        let config = load_config(&project_dir, Some(&fake_home), Some(&fake_xdg)).unwrap();
+        assert_eq!(
+            config.tools.get("from_xdg").unwrap().system_path.as_deref(),
+            Some("/bin/from_xdg")
+        );
+
+        // 2. When XDG_CONFIG_HOME is relative, it falls back to $HOME/.config/scrim/scrim.yaml
+        let home_scrim_dir = fake_home.join(".config/scrim");
+        fs::create_dir_all(&home_scrim_dir).unwrap();
+        fs::write(
+            home_scrim_dir.join("scrim.yaml"),
+            "tools:\n  from_home: { system_path: '/bin/from_home' }",
+        )
+        .unwrap();
+
+        let config_rel = load_config(
+            &project_dir,
+            Some(&fake_home),
+            Some(Path::new("relative/path")),
+        )
+        .unwrap();
+        assert_eq!(
+            config_rel.tools.get("from_home").unwrap().system_path.as_deref(),
+            Some("/bin/from_home")
+        );
+    }
+
+    #[test]
+    fn test_resolve_config_dir() {
+        let home = Path::new("/home/user");
+        let xdg_abs = Path::new("/custom/xdg_config");
+        let xdg_rel = Path::new("custom/xdg_config");
+        let empty_path = Path::new("");
+
+        // Absolute path is respected
+        assert_eq!(
+            resolve_config_dir(Some(xdg_abs), Some(home)),
+            PathBuf::from("/custom/xdg_config")
+        );
+
+        // Relative path is ignored per XDG spec, falls back to $HOME/.config
+        assert_eq!(
+            resolve_config_dir(Some(xdg_rel), Some(home)),
+            PathBuf::from("/home/user/.config")
+        );
+
+        // Empty path falls back to $HOME/.config
+        assert_eq!(
+            resolve_config_dir(Some(empty_path), Some(home)),
+            PathBuf::from("/home/user/.config")
+        );
+
+        // None falls back to $HOME/.config
+        assert_eq!(
+            resolve_config_dir(None, Some(home)),
+            PathBuf::from("/home/user/.config")
+        );
+
+        // HOME absent falls back to .config
+        assert_eq!(
+            resolve_config_dir(None, None),
+            PathBuf::from(".config")
+        );
+    }
+
+    #[test]
+    fn test_resolve_cache_dir() {
+        let home = Path::new("/home/user");
+        let xdg_abs = Path::new("/custom/xdg_cache");
+        let xdg_rel = Path::new("custom/xdg_cache");
+        let empty_path = Path::new("");
+
+        // Absolute path is respected
+        assert_eq!(
+            resolve_cache_dir(Some(xdg_abs), Some(home)),
+            PathBuf::from("/custom/xdg_cache/scrim")
+        );
+
+        // Relative path is ignored per XDG spec, falls back to $HOME/.cache
+        assert_eq!(
+            resolve_cache_dir(Some(xdg_rel), Some(home)),
+            PathBuf::from("/home/user/.cache/scrim")
+        );
+
+        // Empty path falls back to $HOME/.cache
+        assert_eq!(
+            resolve_cache_dir(Some(empty_path), Some(home)),
+            PathBuf::from("/home/user/.cache/scrim")
+        );
+
+        // None falls back to $HOME/.cache
+        assert_eq!(
+            resolve_cache_dir(None, Some(home)),
+            PathBuf::from("/home/user/.cache/scrim")
+        );
+
+        // HOME absent falls back to .cache
+        assert_eq!(
+            resolve_cache_dir(None, None),
+            PathBuf::from(".cache/scrim")
+        );
     }
 }

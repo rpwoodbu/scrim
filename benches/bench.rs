@@ -32,7 +32,7 @@ fn bench_config_resolution(c: &mut Criterion) {
     fs::create_dir_all(&child).unwrap();
 
     c.bench_function("config_resolution", |b| {
-        b.iter(|| config::load_config(black_box(&child), Some(dir.path())))
+        b.iter(|| config::load_config(black_box(&child), Some(dir.path()), None))
     });
 }
 

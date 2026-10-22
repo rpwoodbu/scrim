@@ -24,39 +24,55 @@ fn main() {
         .unwrap_or("scrim")
         .to_string();
 
+    let app_env = AppEnvironment::capture();
+
     if program_name == "scrim" {
-        handle_management_command(&args);
+        handle_management_command(&args, &app_env);
     } else {
-        proxy_command(&program_name, &args);
+        proxy_command(&program_name, &args, &app_env);
     }
 }
 
-fn get_home_dir() -> Option<PathBuf> {
-    env::var_os("HOME").map(PathBuf::from)
+struct AppEnvironment {
+    home_dir: Option<PathBuf>,
+    xdg_config_home: Option<PathBuf>,
+    xdg_cache_home: Option<PathBuf>,
+}
+
+impl AppEnvironment {
+    fn capture() -> Self {
+        Self {
+            home_dir: env::var_os("HOME").map(PathBuf::from),
+            xdg_config_home: env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
+            xdg_cache_home: env::var_os("XDG_CACHE_HOME").map(PathBuf::from),
+        }
+    }
 }
 
 const BINARY_COMMIT: Option<&str> = option_env!("SCRIM_GIT_COMMIT");
 
-fn load_configuration() -> (Config, Option<PathBuf>) {
+fn load_configuration(app_env: &AppEnvironment) -> Config {
     let cwd = env::current_dir().expect("Failed to get current directory");
-    let home_dir = get_home_dir();
-    let config = match config::load_config(&cwd, home_dir.as_deref()) {
+    match config::load_config(
+        &cwd,
+        app_env.home_dir.as_deref(),
+        app_env.xdg_config_home.as_deref(),
+    ) {
         Ok(c) => c,
         Err(e) => {
             scrim_error!("Failed to load configuration: {}", e);
             std::process::exit(1);
         }
-    };
-    (config, home_dir)
+    }
 }
 
-fn handle_management_command(args: &[std::ffi::OsString]) {
+fn handle_management_command(args: &[std::ffi::OsString], app_env: &AppEnvironment) {
     match parse_management_cli(args) {
         CliParseResult::Command(CliCommand::Version) => {
             println!("{}", format_version(BINARY_COMMIT));
         }
         CliParseResult::Command(CliCommand::Config { tool }) => {
-            let (config, _) = load_configuration();
+            let config = load_configuration(app_env);
             if let Some(tool_name) = tool {
                 match config.tools.get(&tool_name) {
                     Some(tool_config) => match serde_yaml::to_string(tool_config) {
@@ -96,7 +112,7 @@ fn handle_management_command(args: &[std::ffi::OsString]) {
                     std::process::exit(1);
                 }
             };
-            let (config, _) = load_configuration();
+            let config = load_configuration(app_env);
             match create_links(dir_arg, &scrim_exe, &config, dry_run) {
                 Ok(modified) => {
                     if dry_run && modified {
@@ -117,7 +133,7 @@ fn handle_management_command(args: &[std::ffi::OsString]) {
                     std::process::exit(1);
                 }
             };
-            execute_tool(&tool_name, &args);
+            execute_tool(&tool_name, &args, app_env);
         }
         CliParseResult::Help(text) => {
             print!("{}", text);
@@ -130,13 +146,13 @@ fn handle_management_command(args: &[std::ffi::OsString]) {
     }
 }
 
-fn proxy_command(program_name: &str, args: &[std::ffi::OsString]) -> ! {
+fn proxy_command(program_name: &str, args: &[std::ffi::OsString], app_env: &AppEnvironment) -> ! {
     let tool_args = if args.len() > 1 { &args[1..] } else { &[] };
-    execute_tool(program_name, tool_args);
+    execute_tool(program_name, tool_args, app_env);
 }
 
-fn execute_tool(program_name: &str, tool_args: &[std::ffi::OsString]) -> ! {
-    let (config, home_dir) = load_configuration();
+fn execute_tool(program_name: &str, tool_args: &[std::ffi::OsString], app_env: &AppEnvironment) -> ! {
+    let config = load_configuration(app_env);
     let resolution = resolve_tool(program_name, Some(&config));
 
     match resolution {
@@ -148,10 +164,11 @@ fn execute_tool(program_name: &str, tool_args: &[std::ffi::OsString]) -> ! {
                     sha256,
                     archive_path,
                 } => {
-                    let tools_dir = home_dir
-                        .as_ref()
-                        .map(|h| h.join(".cache/scrim/tools"))
-                        .unwrap_or_else(|| PathBuf::from(".cache/scrim/tools"));
+                    let base_cache = config::resolve_cache_dir(
+                        app_env.xdg_cache_home.as_deref(),
+                        app_env.home_dir.as_deref(),
+                    );
+                    let tools_dir = base_cache.join("tools");
                     let cache_dir = tools_dir.join(&sha256);
                     match fetch_tool(
                         program_name,

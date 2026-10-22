@@ -29,7 +29,7 @@
 
 ### Management CLI
 
-When invoked directly as `scrim` (i.e., `argv[0]` is `scrim`), Scrim provides a management CLI rather than proxying a tool. CLI arguments are parsed using `clap`. Running `scrim` without any arguments will display usage information and available commands. Scrim will fail with an error if the user provides any invalid arguments or undefined flags. The CLI supports the following commands:
+When invoked directly as `scrim` (i.e., `argv[0]` is `scrim`), Scrim provides a management CLI rather than proxying a tool. CLI arguments are parsed using `clap`. Running `scrim` without any arguments will display usage information and available commands. Scrim will fail with an error if the user provides any invalid arguments or undefined flags. The main help output also documents supported environment variables (e.g., `XDG_CACHE_HOME`, `XDG_CONFIG_HOME`). The CLI supports the following commands:
 - `help`: Displays usage information and available commands.
 - `version`: Displays the version of Scrim. If built with workspace status stamping (e.g., release builds), it outputs the release commit hash alongside the semantic version in the format `scrim <version> (<commit_hash>)`. In unstamped builds, it outputs `scrim <version>`.
 - `config`: Reports the resultant aggregated configuration after resolving all configuration layers, or reports a specific tool's configuration if an optional tool name argument is provided. Unspecified fields and empty collections are omitted from the output to reduce noise.
@@ -121,7 +121,9 @@ When a command (e.g., `node`) is invoked, Scrim follows this resolution logic:
 
 1.  **Configuration Layering**: Scrim resolves configurations by aggregating them across multiple layers. The resultant configuration includes all tools found across all layers. In cases where the same tool or global setting is defined in multiple layers, the layer with the highest precedence wins (i.e., precedence is evaluated on a per-tool basis). The configuration layers, in increasing order of precedence, are:
     1. **System-Level Configuration**: `/etc/scrim/scrim.yaml`
-    2. **User-Level Configuration**: `~/.config/scrim/scrim.yaml`
+    2. **User-Level Configuration**: `<resolved_config_dir>/scrim/scrim.yaml`. Following the [XDG Base Directory Specification][xdg-basedir], `<resolved_config_dir>` is determined by:
+        1. Environment variable: `XDG_CONFIG_HOME`, if set, non-empty, and an absolute path.
+        2. Default location: `~/.config` (falling back to `./.config` if `$HOME` is unset).
     3. **Recursive Search**: Search upwards from the current working directory (CWD) for `scrim.yaml` files. To minimize filesystem overhead, the search automatically stops when it encounters a known repository boundary (e.g., a `.git` directory). Configuration files found in child directories take precedence over those found in their parent directories.
 2.  **Configuration Rules**:
     - **Note**: The configuration uses YAML and separates global settings (like `telemetry`) from tool-specific configurations.
@@ -137,8 +139,11 @@ When a command (e.g., `node`) is invoked, Scrim follows this resolution logic:
 
 3.  **Execution**:
     - If the resolved version is a **Local Path** (via `system_path`), execute it directly.
-    - If the resolved version needs to be **Fetched**, check the user's cache directory (e.g., `~/.cache/scrim/tools/`). Two entries must exist in that directory for a cache hit: a subdirectory named `<sha256>`, and a file named `<sha256>.url` which must contain the specified URL. Caching by both `sha256` and `url` ensures that updating the tool's `url` in `scrim.yaml` without changing the `sha256` will not continue executing the old version.
-    - If missing or if the cached URL does not match the configured `url`, Scrim continues to download the tool from the specified `url`. During download, Scrim computes the actual SHA256 digest in a streaming manner. If the computed digest does not match the configured `sha256`, Scrim aborts execution and reports an actionable verification error displaying both the expected and actual digests, facilitating easy configuration updates. If the digest matches, Scrim records the URL in `~/.cache/scrim/tools/<sha256>.url` (supporting multiple verified source URLs, such as mirrors, on separate lines), extracts the archive (if applicable), and executes the tool. Fetching is implemented entirely using native Rust crates (`ureq`, `sha2`, `tar`, `flate2`, `zip`, `lzma-rs`) to eliminate external shell command dependencies (`curl`, `sha256sum`, `tar`, `unzip`, `xz`) and ensure Scrim is a truly self-contained binary.
+    - If the resolved version needs to be **Fetched**, check the tools cache directory (`<resolved_cache_dir>/tools/`). Following the [XDG Base Directory Specification][xdg-basedir], the base cache directory `<resolved_cache_dir>` is `<resolved_xdg_cache_home>/scrim`, where `<resolved_xdg_cache_home>` is resolved as:
+        1. Environment variable: `XDG_CACHE_HOME`, if set, non-empty, and an absolute path.
+        2. Default location: `~/.cache` (falling back to `./.cache` if `$HOME` is unset).
+      Two entries must exist in `<resolved_cache_dir>/tools/` for a cache hit: a subdirectory named `<sha256>`, and a file named `<sha256>.url` which must contain the specified URL. Caching by both `sha256` and `url` ensures that updating the tool's `url` in `scrim.yaml` without changing the `sha256` will not continue executing the old version.
+    - If missing or if the cached URL does not match the configured `url`, Scrim continues to download the tool from the specified `url`. During download, Scrim computes the actual SHA256 digest in a streaming manner. If the computed digest does not match the configured `sha256`, Scrim aborts execution and reports an actionable verification error displaying both the expected and actual digests, facilitating easy configuration updates. If the digest matches, Scrim records the URL in `<resolved_cache_dir>/tools/<sha256>.url` (supporting multiple verified source URLs, such as mirrors, on separate lines), extracts the archive (if applicable), and executes the tool. Fetching is implemented entirely using native Rust crates (`ureq`, `sha2`, `tar`, `flate2`, `zip`, `lzma-rs`) to eliminate external shell command dependencies (`curl`, `sha256sum`, `tar`, `unzip`, `xz`) and ensure Scrim is a truly self-contained binary.
         - **Concurrency Safety & Cache Poisoning**: To prevent multiple Scrim processes from corrupting the cache or using a partially downloaded file, downloads are written to a temporary file (`tempfile::NamedTempFile`) and only atomically persisted to the final cache destination upon successful verification.
         - **Streaming Hash Optimization**: To maximize performance during fetching, the SHA256 digest is computed in memory via a custom streaming writer concurrently with the download stream, completely eliminating the penalty of double-reading the payload from disk.
         - **IPv4 & IPv6 Dual-Stack Support**: The HTTP fetching client supports both IPv4 and IPv6 network connectivity, resolving dual-stack endpoints and handling IPv6 literal addresses in URLs (e.g., `http://[::1]:<port>/...`).
@@ -214,9 +219,10 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
 - **Regression Prevention**: If a bug is discovered, a dedicated regression test must be written that clearly reproduces and elucidates the bug, ensuring it never returns.
 
 ## Future Work
-- **Cache Management**: Commands to clean or inspect the `~/.cache/scrim` directory.
-- **Cache Override Support**: Support environment variable overrides (e.g., `SCRIM_CACHE_DIR`) to configure the cache directory dynamically.
+- **Cache Management**: Commands to clean or inspect the cache directory.
 - **Home Directory Search Boundary**: Stop upward directory traversal for `scrim.yaml` at `$HOME` to prevent scanning system directories when outside of a repository.
 - **Configurable Telemetry**: Support configuring the telemetry behavior and output destination (rather than hardcoding `/tmp/scrim_telemetry.log`).
 - **Cross-Platform Releases**: Support for building and releasing binaries for other architectures and operating systems (e.g., ARM64, macOS).
 - **Per-Platform Configuration**: Configuration needs to allow per-platform specification.
+
+[xdg-basedir]: https://specifications.freedesktop.org/basedir/0.8/ "XDG Base Directory Specification (version 0.8)"
