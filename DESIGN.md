@@ -43,7 +43,7 @@ The `scrim config` command reports the resultant aggregated configuration after 
 - **Arguments**: Optional `<TOOL>` (name of the tool whose configuration to report).
 - **Behavior**:
   1. Resolves aggregated configuration across system, user, and workspace layers.
-  2. If `<TOOL>` is omitted, serializes and prints the entire aggregated configuration in YAML format.
+  2. If `<TOOL>` is omitted, serializes and prints the entire aggregated configuration in YAML format, with tools sorted in ascending lexicographical order by tool name.
   3. If `<TOOL>` is provided, looks up `<TOOL>` in the aggregated configuration. If found, serializes and prints only that tool's configuration in YAML format (omitting unspecified fields).
 - **Error Handling**:
   - Exits with non-zero status and an attributed error message if `<TOOL>` is provided but not found in the aggregated configuration (`[Scrim] Error: Tool '<TOOL>' not found in config`), or if invalid flags or additional arguments are provided.

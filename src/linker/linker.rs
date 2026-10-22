@@ -176,7 +176,7 @@ pub fn create_links(
 mod tests {
     use super::*;
     use config::ToolConfig;
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
     use tempfile::tempdir;
 
     #[test]
@@ -226,7 +226,7 @@ mod tests {
         let other_file = bin_dir.join("unrelated");
         fs::write(&other_file, "content").unwrap();
 
-        let mut tools = HashMap::new();
+        let mut tools = BTreeMap::new();
         tools.insert("node".to_string(), ToolConfig::default());
         tools.insert("go".to_string(), ToolConfig::default());
         let config = Config {
@@ -274,7 +274,7 @@ mod tests {
         let stale_link = bin_dir.join("oldtool");
         symlink(Path::new("../scrim"), &stale_link).unwrap();
 
-        let mut tools = HashMap::new();
+        let mut tools = BTreeMap::new();
         tools.insert("node".to_string(), ToolConfig::default());
         let config = Config {
             telemetry: None,
@@ -319,7 +319,7 @@ mod tests {
         symlink(Path::new("/bin/echo"), &existing_go_link).unwrap();
 
         // 3. Tool 'rust' does not exist yet
-        let mut tools = HashMap::new();
+        let mut tools = BTreeMap::new();
         tools.insert("node".to_string(), ToolConfig::default());
         tools.insert("go".to_string(), ToolConfig::default());
         tools.insert("rust".to_string(), ToolConfig::default());

@@ -897,6 +897,29 @@ tools:
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(!stdout.contains("tools:"), "Empty tools collection should be omitted");
 
+    // 4.6 Run with 'config' on multiple tools to verify output is sorted by tool name
+    let sorted_test_config = r#"telemetry: true
+tools:
+  zebra:
+    system_path: /bin/echo
+  apple:
+    system_path: /bin/cat
+  mango:
+    system_path: /bin/ls
+"#;
+    std::fs::write(&scrim_yaml, sorted_test_config).unwrap();
+    let output = Command::new(&scrim_bin)
+        .arg("config")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim config for sorting test");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let apple_pos = stdout.find("apple:").expect("apple should be in output");
+    let mango_pos = stdout.find("mango:").expect("mango should be in output");
+    let zebra_pos = stdout.find("zebra:").expect("zebra should be in output");
+    assert!(apple_pos < mango_pos, "apple must precede mango in output");
+    assert!(mango_pos < zebra_pos, "mango must precede zebra in output");
+
     // 5. Run with invalid argument
     let output = Command::new(&scrim_bin)
         .arg("unknown_command")

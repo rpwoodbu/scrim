@@ -84,11 +84,11 @@ pub fn resolve_tool(program_name: &str, config: Option<&Config>) -> Result<Optio
 mod tests {
     use super::*;
     use config::{Config, ToolConfig};
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     #[test]
     fn test_resolve_from_config_path() {
-        let mut tools = HashMap::new();
+        let mut tools = BTreeMap::new();
         tools.insert("node".to_string(), ToolConfig {
             system_path: Some("/usr/bin/node".to_string()),
             url: None,
@@ -108,7 +108,7 @@ mod tests {
 
     #[test]
     fn test_resolve_fetch() {
-        let mut tools = HashMap::new();
+        let mut tools = BTreeMap::new();
         tools.insert("go".to_string(), ToolConfig {
             system_path: None,
             url: Some("https://go.dev/dl/go.tar.gz".to_string()),
@@ -128,7 +128,7 @@ mod tests {
 
     #[test]
     fn test_resolve_template() {
-        let mut tools = HashMap::new();
+        let mut tools = BTreeMap::new();
         tools.insert("go".to_string(), ToolConfig {
             system_path: None,
             url: Some("https://go.dev/dl/go.tar.gz".to_string()),
@@ -155,7 +155,7 @@ mod tests {
 
     #[test]
     fn test_resolve_template_chain_disallowed() {
-        let mut tools = HashMap::new();
+        let mut tools = BTreeMap::new();
         tools.insert("go".to_string(), ToolConfig {
             system_path: None,
             url: Some("https://go.dev/dl/go.tar.gz".to_string()),
@@ -185,7 +185,7 @@ mod tests {
 
     #[test]
     fn test_resolve_validation_errors() {
-        let mut tools = HashMap::new();
+        let mut tools = BTreeMap::new();
         // Path with fetch-related property
         tools.insert("err_path".to_string(), ToolConfig {
             system_path: Some("/bin/node".to_string()),
@@ -257,7 +257,7 @@ mod tests {
             Err("Tool 'err_archive_template' specifies 'archive_path' but the referenced template does not provide a fetchable archive.".to_string())
         );
 
-        let mut tools2 = HashMap::new();
+        let mut tools2 = BTreeMap::new();
         tools2.insert("empty_tool".to_string(), ToolConfig {
             system_path: None,
             url: None,

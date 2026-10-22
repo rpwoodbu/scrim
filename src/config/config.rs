@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 #[serde_with::skip_serializing_none]
@@ -19,8 +19,8 @@ pub struct ToolConfig {
 pub struct Config {
     #[serde(default)]
     pub telemetry: Option<bool>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub tools: HashMap<String, ToolConfig>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tools: BTreeMap<String, ToolConfig>,
 }
 
 impl Config {
@@ -364,5 +364,34 @@ tools:
             resolve_cache_dir(None, None),
             PathBuf::from(".cache/scrim")
         );
+    }
+
+    #[test]
+    fn test_config_serialization_order() {
+        let mut tools = BTreeMap::new();
+        tools.insert("zeta".to_string(), ToolConfig {
+            system_path: Some("/bin/zeta".to_string()),
+            ..Default::default()
+        });
+        tools.insert("alpha".to_string(), ToolConfig {
+            system_path: Some("/bin/alpha".to_string()),
+            ..Default::default()
+        });
+        tools.insert("beta".to_string(), ToolConfig {
+            system_path: Some("/bin/beta".to_string()),
+            ..Default::default()
+        });
+        let config = Config {
+            telemetry: Some(true),
+            tools,
+        };
+
+        let yaml = serde_yaml::to_string(&config).unwrap();
+        let alpha_pos = yaml.find("alpha").unwrap();
+        let beta_pos = yaml.find("beta").unwrap();
+        let zeta_pos = yaml.find("zeta").unwrap();
+
+        assert!(alpha_pos < beta_pos);
+        assert!(beta_pos < zeta_pos);
     }
 }
