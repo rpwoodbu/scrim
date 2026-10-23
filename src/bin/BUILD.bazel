@@ -8,7 +8,7 @@ rust_binary(
         "SCRIM_GIT_COMMIT": "{STABLE_GIT_COMMIT}",
     },
     rustc_flags = select({
-        "//:musl": ["-C", "relocation-model=static"],
+        "@llvm//platforms/config:musl": ["-C", "relocation-model=static"],
         "//conditions:default": [],
     }),
     stamp = -1,

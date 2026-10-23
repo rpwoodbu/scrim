@@ -5,7 +5,7 @@ rust_binary(
     srcs = ["bench.rs"],
     edition = "2021",
     rustc_flags = select({
-        "//:musl": ["-C", "relocation-model=static"],
+        "@llvm//platforms/config:musl": ["-C", "relocation-model=static"],
         "//conditions:default": [],
     }),
     visibility = ["//visibility:public"],
