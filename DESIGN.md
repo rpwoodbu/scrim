@@ -88,6 +88,11 @@ The `scrim run` command executes any tool defined in the aggregated configuratio
 Example `scrim.yaml`:
 ```yaml
 telemetry: true # disabled (false) by default
+imports:
+  - base-tools.yaml
+  - path: ../overrides/tools.yaml
+    optional: true
+    precedence: after
 tools:
   node:
     system_path: /bin/node
@@ -127,6 +132,27 @@ When a command (e.g., `node`) is invoked, Scrim follows this resolution logic:
     3. **Recursive Search**: Search upwards from the current working directory (CWD) for `scrim.yaml` files. To minimize filesystem overhead, the search automatically stops when it encounters a known repository boundary (e.g., a `.git` directory). Configuration files found in child directories take precedence over those found in their parent directories.
 2.  **Configuration Rules**:
     - **Note**: The configuration uses YAML and separates global settings (like `telemetry`) from tool-specific configurations.
+    - **Configuration Imports**: A configuration file may specify an `imports` list to include definitions from other configuration files.
+        - **Syntax**: Entries in `imports` can be either a string shorthand representing the relative or absolute path (e.g., `- base-tools.yaml` or `- shared/tools.yaml`) or a structured object:
+          ```yaml
+          imports:
+            - path: <path>
+              optional: false     # default: false (fails if file does not exist)
+              precedence: before  # default: before; options are "before" or "after"
+          ```
+        - **Path Resolution**: Relative paths specified in `path` (or string shorthand) MUST be resolved relative to the directory containing the configuration file declaring the import, never relative to the current working directory.
+        - **Missing Files**: If an imported file does not exist:
+          - If `optional` is `false` (the default), Scrim MUST reject the configuration with an actionable error.
+          - If `optional` is `true`, Scrim silently ignores the missing file and proceeds.
+        - **Precedence Order**:
+          - Imports with `precedence: before` (the default) are evaluated before the importing file's own tool and setting definitions, acting as defaults that the importing file can override.
+          - Imports with `precedence: after` are evaluated after the importing file's own definitions, taking precedence over and overriding definitions in the importing file.
+          - When multiple imports share the same precedence category (`before` or `after`), they are evaluated sequentially in the order listed, with later imports taking precedence over earlier imports within that category.
+          - Concretely, definitions within a single configuration file are assembled in the order:
+            1. All `precedence: before` imports (in declared sequence).
+            2. The current configuration file's own definitions.
+            3. All `precedence: after` imports (in declared sequence).
+        - **Transitive Imports & Cycle Detection**: Imported files may themselves contain `imports`. Scrim tracks the canonical paths of configuration files currently in the active import stack; if a circular import is detected, Scrim MUST abort with an actionable error indicating the cycle.
     - **Supported Digests**: Scrim supports cryptographic checksums using `sha256` or `sha512`.
     - **Tool Templates**: A tool can specify a `template: <tool_name>` property to inherit the `url` and configured digest of another tool configuration, minimizing repetition and preventing mismatches within toolchains. Template chains are not allowed; a templated entry must directly reference a concrete tool configuration.
     

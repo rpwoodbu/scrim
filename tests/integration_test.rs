@@ -2073,5 +2073,120 @@ tools:
     );
 }
 
+#[test]
+fn test_e2e_config_imports_with_precedence_and_cli() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    // 1. Create base config
+    let base_yaml = temp_path.join("base-tools.yaml");
+    fs::write(
+        &base_yaml,
+        r#"
+tools:
+  node:
+    system_path: /bin/base_node
+  shared_util:
+    system_path: /bin/shared_util
+"#,
+    )
+    .unwrap();
+
+    // 2. Create override config
+    let overrides_dir = temp_path.join("overrides");
+    fs::create_dir_all(&overrides_dir).unwrap();
+    let override_yaml = overrides_dir.join("tools.yaml");
+    fs::write(
+        &override_yaml,
+        r#"
+tools:
+  python:
+    system_path: /bin/override_python
+"#,
+    )
+    .unwrap();
+
+    // 3. Create root scrim.yaml
+    let root_scrim = temp_path.join("scrim.yaml");
+    fs::write(
+        &root_scrim,
+        r#"
+telemetry: true
+imports:
+  - base-tools.yaml
+  - path: overrides/tools.yaml
+    precedence: after
+  - path: optional-missing.yaml
+    optional: true
+tools:
+  node:
+    system_path: /bin/root_node
+  python:
+    system_path: /bin/root_python
+"#,
+    )
+    .unwrap();
+
+    // Test scrim config CLI output
+    let output = Command::new(&scrim_bin)
+        .arg("config")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to execute scrim config");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    
+    // node was defined in root, overriding base-tools.yaml (precedence: before)
+    assert!(stdout.contains("node:"));
+    assert!(stdout.contains("system_path: /bin/root_node"));
+    
+    // shared_util was imported from base-tools.yaml
+    assert!(stdout.contains("shared_util:"));
+    assert!(stdout.contains("system_path: /bin/shared_util"));
+    
+    // python was overridden by overrides/tools.yaml (precedence: after)
+    assert!(stdout.contains("python:"));
+    assert!(stdout.contains("system_path: /bin/override_python"));
+
+    // imports key should not appear in final aggregated scrim config output
+    assert!(!stdout.contains("imports:"));
+
+    // Also verify `scrim config <tool>` for imported and overridden tools
+    let output_python = Command::new(&scrim_bin)
+        .args(["config", "python"])
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to execute scrim config python");
+    assert!(output_python.status.success());
+    let stdout_python = String::from_utf8(output_python.stdout).unwrap();
+    assert!(stdout_python.contains("system_path: /bin/override_python"));
+}
+
+#[test]
+fn test_e2e_config_imports_circular_error() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    let a_yaml = temp_path.join("a.yaml");
+    let b_yaml = temp_path.join("b.yaml");
+    let scrim_yaml = temp_path.join("scrim.yaml");
+
+    fs::write(&a_yaml, "imports:\n  - b.yaml\n").unwrap();
+    fs::write(&b_yaml, "imports:\n  - a.yaml\n").unwrap();
+    fs::write(&scrim_yaml, "imports:\n  - a.yaml\n").unwrap();
+
+    let output = Command::new(&scrim_bin)
+        .arg("config")
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to execute scrim config");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("Circular import detected"));
+}
 
 

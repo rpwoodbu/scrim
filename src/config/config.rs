@@ -2,6 +2,59 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ImportPrecedence {
+    Before,
+    After,
+}
+
+impl Default for ImportPrecedence {
+    fn default() -> Self {
+        ImportPrecedence::Before
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImportObject {
+    pub path: String,
+    #[serde(default)]
+    pub optional: bool,
+    #[serde(default)]
+    pub precedence: ImportPrecedence,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ImportEntry {
+    Shorthand(String),
+    Structured(ImportObject),
+}
+
+impl ImportEntry {
+    pub fn path(&self) -> &str {
+        match self {
+            ImportEntry::Shorthand(path) => path,
+            ImportEntry::Structured(obj) => &obj.path,
+        }
+    }
+
+    pub fn optional(&self) -> bool {
+        match self {
+            ImportEntry::Shorthand(_) => false,
+            ImportEntry::Structured(obj) => obj.optional,
+        }
+    }
+
+    pub fn precedence(&self) -> &ImportPrecedence {
+        match self {
+            ImportEntry::Shorthand(_) => &ImportPrecedence::Before,
+            ImportEntry::Structured(obj) => &obj.precedence,
+        }
+    }
+}
+
 #[serde_with::skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -20,6 +73,8 @@ pub struct ToolConfig {
 pub struct Config {
     #[serde(default)]
     pub telemetry: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub imports: Vec<ImportEntry>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tools: BTreeMap<String, ToolConfig>,
 }
@@ -90,9 +145,92 @@ pub fn load_config(
 }
 
 pub fn read_config(path: &Path) -> Result<Config, Box<dyn std::error::Error>> {
-    let content = std::fs::read_to_string(path)?;
-    let config: Config = serde_yaml::from_str(&content)?;
-    Ok(config)
+    let mut import_stack = Vec::new();
+    read_config_internal(path, &mut import_stack)
+}
+
+fn read_config_internal(
+    path: &Path,
+    import_stack: &mut Vec<PathBuf>,
+) -> Result<Config, Box<dyn std::error::Error>> {
+    let canonical = path.canonicalize().map_err(|e| {
+        format!("Failed to resolve configuration path '{}': {}", path.display(), e)
+    })?;
+
+    if import_stack.contains(&canonical) {
+        let cycle_chain = import_stack
+            .iter()
+            .chain(std::iter::once(&canonical))
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(" -> ");
+        return Err(format!("Circular import detected in configuration: {}", cycle_chain).into());
+    }
+
+    let base_dir = canonical
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("/"));
+
+    import_stack.push(canonical);
+
+    let content = std::fs::read_to_string(path).map_err(|e| {
+        format!("Failed to read configuration file '{}': {}", path.display(), e)
+    })?;
+
+    let parsed: Config = serde_yaml::from_str(&content).map_err(|e| {
+        format!("Failed to parse configuration file '{}': {}", path.display(), e)
+    })?;
+
+    let mut before_config = Config::default();
+    let mut after_config = Config::default();
+
+    for import_entry in &parsed.imports {
+        let import_path_str = import_entry.path();
+        let target_path = if Path::new(import_path_str).is_absolute() {
+            PathBuf::from(import_path_str)
+        } else {
+            base_dir.join(import_path_str)
+        };
+
+        if !target_path.exists() {
+            if import_entry.optional() {
+                continue;
+            } else {
+                return Err(format!(
+                    "Imported configuration file '{}' declared in '{}' does not exist",
+                    target_path.display(),
+                    path.display()
+                )
+                .into());
+            }
+        }
+
+        let imported = read_config_internal(&target_path, import_stack)?;
+        match import_entry.precedence() {
+            ImportPrecedence::Before => {
+                before_config = before_config.merge(imported);
+            }
+            ImportPrecedence::After => {
+                after_config = after_config.merge(imported);
+            }
+        }
+    }
+
+    import_stack.pop();
+
+    // Layering inside file:
+    // 1. All precedence: before imports (in order)
+    // 2. Current file's own definitions
+    // 3. All precedence: after imports (in order)
+    let current_file_clean = Config {
+        telemetry: parsed.telemetry,
+        imports: Vec::new(),
+        tools: parsed.tools,
+    };
+
+    let result = before_config.merge(current_file_clean).merge(after_config);
+    Ok(result)
 }
 
 pub fn resolve_config_dir(xdg_config_env: Option<&Path>, home_dir: Option<&Path>) -> PathBuf {
@@ -384,6 +522,7 @@ tools:
         });
         let config = Config {
             telemetry: Some(true),
+            imports: Vec::new(),
             tools,
         };
 
@@ -394,5 +533,273 @@ tools:
 
         assert!(alpha_pos < beta_pos);
         assert!(beta_pos < zeta_pos);
+    }
+
+    #[test]
+    fn test_parse_imports_shorthand_and_structured() {
+        let yaml = r#"
+imports:
+  - base.yaml
+  - path: overrides.yaml
+    optional: true
+    precedence: after
+tools:
+  node:
+    system_path: /bin/node
+"#;
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.imports.len(), 2);
+        assert_eq!(config.imports[0].path(), "base.yaml");
+        assert_eq!(config.imports[0].optional(), false);
+        assert_eq!(config.imports[0].precedence(), &ImportPrecedence::Before);
+
+        assert_eq!(config.imports[1].path(), "overrides.yaml");
+        assert_eq!(config.imports[1].optional(), true);
+        assert_eq!(config.imports[1].precedence(), &ImportPrecedence::After);
+    }
+
+    #[test]
+    fn test_imports_precedence_and_overrides() {
+        let root = tempdir().unwrap();
+
+        // base.yaml (precedence: before)
+        let base_path = root.path().join("base.yaml");
+        fs::write(
+            &base_path,
+            r#"
+tools:
+  tool_a:
+    system_path: /bin/base_a
+  tool_b:
+    system_path: /bin/base_b
+  tool_c:
+    system_path: /bin/base_c
+"#,
+        )
+        .unwrap();
+
+        // override.yaml (precedence: after)
+        let override_path = root.path().join("override.yaml");
+        fs::write(
+            &override_path,
+            r#"
+tools:
+  tool_b:
+    system_path: /bin/override_b
+"#,
+        )
+        .unwrap();
+
+        // main scrim.yaml:
+        // - imports base.yaml (precedence before, so main's tool_a overrides base's tool_a)
+        // - defines tool_a (overrides base) and tool_b (will be overridden by after)
+        // - imports override.yaml (precedence after, so overrides main's tool_b)
+        let main_path = root.path().join("scrim.yaml");
+        fs::write(
+            &main_path,
+            r#"
+imports:
+  - base.yaml
+  - path: override.yaml
+    precedence: after
+tools:
+  tool_a:
+    system_path: /bin/main_a
+  tool_b:
+    system_path: /bin/main_b
+"#,
+        )
+        .unwrap();
+
+        let config = read_config(&main_path).unwrap();
+        // tool_a should be /bin/main_a (main overrides base)
+        assert_eq!(
+            config.tools.get("tool_a").unwrap().system_path.as_deref(),
+            Some("/bin/main_a")
+        );
+        // tool_b should be /bin/override_b (override.yaml takes precedence after main)
+        assert_eq!(
+            config.tools.get("tool_b").unwrap().system_path.as_deref(),
+            Some("/bin/override_b")
+        );
+        // tool_c should be /bin/base_c (inherited from base)
+        assert_eq!(
+            config.tools.get("tool_c").unwrap().system_path.as_deref(),
+            Some("/bin/base_c")
+        );
+    }
+
+    #[test]
+    fn test_imports_sequential_order_within_same_precedence() {
+        let root = tempdir().unwrap();
+
+        let base1 = root.path().join("base1.yaml");
+        fs::write(
+            &base1,
+            "tools:\n  tool1: { system_path: '/bin/base1' }",
+        )
+        .unwrap();
+
+        let base2 = root.path().join("base2.yaml");
+        fs::write(
+            &base2,
+            "tools:\n  tool1: { system_path: '/bin/base2' }",
+        )
+        .unwrap();
+
+        let main_path = root.path().join("scrim.yaml");
+        fs::write(
+            &main_path,
+            "imports:\n  - base1.yaml\n  - base2.yaml\n",
+        )
+        .unwrap();
+
+        let config = read_config(&main_path).unwrap();
+        // base2 was listed second, so it wins over base1
+        assert_eq!(
+            config.tools.get("tool1").unwrap().system_path.as_deref(),
+            Some("/bin/base2")
+        );
+    }
+
+    #[test]
+    fn test_imports_relative_to_declaring_file() {
+        let root = tempdir().unwrap();
+        let sub = root.path().join("subdir");
+        fs::create_dir_all(&sub).unwrap();
+
+        let helper_path = sub.join("helper.yaml");
+        fs::write(
+            &helper_path,
+            "tools:\n  helper: { system_path: '/bin/helper' }",
+        )
+        .unwrap();
+
+        let sub_config = sub.join("scrim.yaml");
+        fs::write(
+            &sub_config,
+            "imports:\n  - helper.yaml\n",
+        )
+        .unwrap();
+
+        // Reading sub_config must resolve helper.yaml relative to subdir/
+        let config = read_config(&sub_config).unwrap();
+        assert_eq!(
+            config.tools.get("helper").unwrap().system_path.as_deref(),
+            Some("/bin/helper")
+        );
+    }
+
+    #[test]
+    fn test_imports_missing_required_fails() {
+        let root = tempdir().unwrap();
+        let main_path = root.path().join("scrim.yaml");
+        fs::write(
+            &main_path,
+            "imports:\n  - nonexistent.yaml\n",
+        )
+        .unwrap();
+
+        let err = read_config(&main_path).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("nonexistent.yaml"));
+        assert!(msg.contains("does not exist"));
+    }
+
+    #[test]
+    fn test_imports_missing_optional_succeeds() {
+        let root = tempdir().unwrap();
+        let main_path = root.path().join("scrim.yaml");
+        fs::write(
+            &main_path,
+            r#"
+imports:
+  - path: nonexistent.yaml
+    optional: true
+tools:
+  node:
+    system_path: /bin/node
+"#,
+        )
+        .unwrap();
+
+        let config = read_config(&main_path).unwrap();
+        assert_eq!(
+            config.tools.get("node").unwrap().system_path.as_deref(),
+            Some("/bin/node")
+        );
+    }
+
+    #[test]
+    fn test_imports_circular_dependency_fails() {
+        let root = tempdir().unwrap();
+        let file_a = root.path().join("a.yaml");
+        let file_b = root.path().join("b.yaml");
+
+        fs::write(
+            &file_a,
+            "imports:\n  - b.yaml\ntools:\n  a: { system_path: '/bin/a' }",
+        )
+        .unwrap();
+
+        fs::write(
+            &file_b,
+            "imports:\n  - a.yaml\ntools:\n  b: { system_path: '/bin/b' }",
+        )
+        .unwrap();
+
+        let err = read_config(&file_a).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Circular import detected"));
+        assert!(msg.contains("a.yaml"));
+        assert!(msg.contains("b.yaml"));
+    }
+
+    #[test]
+    fn test_imports_diamond_dependency_succeeds() {
+        let root = tempdir().unwrap();
+        let file_d = root.path().join("d.yaml");
+        let file_b = root.path().join("b.yaml");
+        let file_c = root.path().join("c.yaml");
+        let file_a = root.path().join("a.yaml");
+
+        // D is imported by both B and C (diamond graph: A -> B, C -> D)
+        fs::write(
+            &file_d,
+            "tools:\n  shared_tool: { system_path: '/bin/shared_tool' }",
+        )
+        .unwrap();
+
+        fs::write(
+            &file_b,
+            "imports:\n  - d.yaml\ntools:\n  tool_b: { system_path: '/bin/tool_b' }",
+        )
+        .unwrap();
+
+        fs::write(
+            &file_c,
+            "imports:\n  - d.yaml\ntools:\n  tool_c: { system_path: '/bin/tool_c' }",
+        )
+        .unwrap();
+
+        fs::write(
+            &file_a,
+            "imports:\n  - b.yaml\n  - c.yaml\n",
+        )
+        .unwrap();
+
+        let config = read_config(&file_a).expect("Diamond imports should not be flagged as circular");
+        assert_eq!(
+            config.tools.get("shared_tool").unwrap().system_path.as_deref(),
+            Some("/bin/shared_tool")
+        );
+        assert_eq!(
+            config.tools.get("tool_b").unwrap().system_path.as_deref(),
+            Some("/bin/tool_b")
+        );
+        assert_eq!(
+            config.tools.get("tool_c").unwrap().system_path.as_deref(),
+            Some("/bin/tool_c")
+        );
     }
 }

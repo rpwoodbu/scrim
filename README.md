@@ -40,6 +40,11 @@ The only other requirement is that each tool needs to have a link (symbolic or h
 
 ```yaml
 telemetry: true # disabled (false) by default
+imports:
+  - base-tools.yaml
+  - path: ../overrides/tools.yaml
+    optional: true
+    precedence: after
 tools:
   node:
     system_path: /bin/node
@@ -59,6 +64,14 @@ tools:
 ```
 
 For fetched archives, `archive_path` defaults to `<tool_name>` at the root of the archive if omitted, or to `AppRun` for `.AppImage` / `.appimage` packages.
+
+### Configuration Imports
+
+Configuration files can import definitions from other files using the top-level `imports` list. Imports can be specified either as a shorthand file path string or as a structured object:
+
+- **Relative Path Resolution**: Relative paths are resolved relative to the directory of the file declaring the import.
+- **Precedence**: `precedence: before` (the default) imports definitions as defaults that can be overridden by the importing file. `precedence: after` imports definitions as overrides that take precedence over the importing file.
+- **Optional Imports**: Set `optional: true` to silently ignore missing files; by default (`optional: false`), missing files trigger an error.
 
 ## Usage
 
