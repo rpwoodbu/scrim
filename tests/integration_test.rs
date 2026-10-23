@@ -1981,5 +1981,97 @@ tools:
     assert!(stderr.contains("Exactly one digest algorithm must be specified"));
 }
 
+#[test]
+fn test_e2e_appimage_unpack_and_execute() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    // 1. Construct a fake Type 2 AppImage with an ELF64 header stub and SquashFS payload
+    let appimage_path = temp_path.join("demotool.AppImage");
+    test_helpers::create_fake_appimage(
+        &appimage_path,
+        &[
+            (
+                "usr/bin/demotool",
+                b"#!/bin/sh\necho \"AppRun Executed: args=$*\"\n",
+                0o755,
+            ),
+            (
+                "usr/bin/subtool",
+                b"#!/bin/sh\necho \"Custom Bin Executed: args=$*\"\n",
+                0o755,
+            ),
+        ],
+        &[("AppRun", "usr/bin/demotool")],
+    );
+
+    let sha256 = compute_sha256(&appimage_path);
+
+    // 2. Create scrim.yaml configuring both default entrypoint (AppRun) and custom archive_path
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    let config_content = format!(
+        r#"
+telemetry: false
+tools:
+  demotool:
+    url: "file://{}"
+    sha256: "{}"
+  subtool:
+    template: demotool
+    archive_path: "usr/bin/subtool"
+"#,
+        appimage_path.to_str().unwrap(),
+        sha256
+    );
+    fs::write(&scrim_yaml, config_content).unwrap();
+
+    let shim_demotool = temp_path.join("demotool");
+    let shim_subtool = temp_path.join("subtool");
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&scrim_bin, &shim_demotool).unwrap();
+        std::os::unix::fs::symlink(&scrim_bin, &shim_subtool).unwrap();
+    }
+
+    let cache_home = temp_path.join("fake_home");
+    fs::create_dir_all(&cache_home).unwrap();
+
+    // 3. Run demotool (should default to AppRun)
+    let output = Command::new(&shim_demotool)
+        .arg("hello")
+        .arg("appimage")
+        .current_dir(temp_path)
+        .env("HOME", &cache_home)
+        .output()
+        .expect("Failed to run demotool AppImage shim");
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+
+    assert!(output.status.success(), "Shim execution failed! Stderr: {}", stderr);
+    assert!(stdout.contains("AppRun Executed: args=hello appimage"));
+    assert!(stderr.contains("[Scrim] Unpacking demotool archive..."));
+
+    // 4. Run subtool (using template + explicit archive_path)
+    let output_sub = Command::new(&shim_subtool)
+        .arg("custom_arg")
+        .current_dir(temp_path)
+        .env("HOME", &cache_home)
+        .output()
+        .expect("Failed to run subtool AppImage shim");
+
+    let stdout_sub = String::from_utf8(output_sub.stdout).unwrap();
+    let stderr_sub = String::from_utf8(output_sub.stderr).unwrap();
+
+    assert!(output_sub.status.success(), "Subtool execution failed! Stderr: {}", stderr_sub);
+    assert!(stdout_sub.contains("Custom Bin Executed: args=custom_arg"));
+    assert!(
+        !stderr_sub.contains("Unpacking"),
+        "Should have hit the already unpacked cache directory! Stderr: {}",
+        stderr_sub
+    );
+}
+
 
 

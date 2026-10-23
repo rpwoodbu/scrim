@@ -5,6 +5,7 @@ use sha2::{Sha256, Sha512, Digest};
 use flate2::read::GzDecoder;
 use tar::Archive;
 use zip::ZipArchive;
+use appimage::extract_appimage;
 
 enum HasherInstance {
     Sha256(Sha256),
@@ -114,7 +115,10 @@ pub fn fetch_tool(
     let is_tar_gz = url_path.ends_with(".tar.gz") || url_path.ends_with(".tgz");
     let is_tar_xz = url_path.ends_with(".tar.xz") || url_path.ends_with(".txz") || url_path.ends_with(".xz");
     let is_zip = url_path.ends_with(".zip");
-    let is_archive = is_tar_gz || is_tar_xz || is_zip;
+    let is_appimage = url_path.ends_with(".AppImage") || url_path.ends_with(".appimage");
+    let is_archive = is_tar_gz || is_tar_xz || is_zip || is_appimage;
+
+    let default_archive_bin = if is_appimage { "AppRun" } else { tool_name };
 
     let target_path = if is_archive {
         if let Some(bin) = archive_path {
@@ -124,7 +128,7 @@ pub fn fetch_tool(
             }
             cache_dir.join(bin)
         } else {
-            cache_dir.join(tool_name)
+            cache_dir.join(default_archive_bin)
         }
     } else {
         cache_dir.join(tool_name)
@@ -214,6 +218,11 @@ pub fn fetch_tool(
             if let Err(e) = archive.extract(unpack_dir.path()) {
                 return Err(format!("Failed to extract zip archive: {}", format_extract_error(&e)).into());
             }
+        } else if is_appimage {
+            let appimage_file = temp_file.reopen()?;
+            if let Err(e) = extract_appimage(appimage_file, unpack_dir.path()) {
+                return Err(format!("Failed to extract AppImage: {}", e).into());
+            }
         }
         
         let temp_target_path = if let Some(bin) = archive_path {
@@ -223,24 +232,48 @@ pub fn fetch_tool(
             }
             unpack_dir.path().join(bin)
         } else {
-            unpack_dir.path().join(tool_name)
+            unpack_dir.path().join(default_archive_bin)
         };
 
-        if !temp_target_path.exists() {
-            return Err(format!("Extracted executable not found at {}", temp_target_path.display()).into());
-        }
+        let symlink_meta = match fs::symlink_metadata(&temp_target_path) {
+            Ok(m) => m,
+            Err(_) => {
+                return Err(format!("Extracted executable not found at {}", temp_target_path.display()).into());
+            }
+        };
+
+        let resolved_target_path = if symlink_meta.file_type().is_symlink() {
+            let canon_root = unpack_dir.path().canonicalize()?;
+            let canon_target = match temp_target_path.canonicalize() {
+                Ok(p) => p,
+                Err(_) => {
+                    return Err(format!(
+                        "Extracted executable {} is a symlink outside of the extracted directory or points to a non-existent target",
+                        temp_target_path.display()
+                    )
+                    .into());
+                }
+            };
+            if !canon_target.starts_with(&canon_root) {
+                return Err(format!(
+                    "Extracted executable {} is a symlink outside of the extracted directory, which is not allowed",
+                    temp_target_path.display()
+                )
+                .into());
+            }
+            canon_target
+        } else {
+            temp_target_path.clone()
+        };
 
         // Ensure the binary is executable BEFORE exposing it
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let metadata = fs::symlink_metadata(&temp_target_path)?;
-            if metadata.file_type().is_symlink() {
-                return Err(format!("Extracted executable {} is a symlink, which is not allowed", temp_target_path.display()).into());
-            }
+            let metadata = fs::metadata(&resolved_target_path)?;
             let mut perms = metadata.permissions();
             perms.set_mode(0o755);
-            fs::set_permissions(&temp_target_path, perms)?;
+            fs::set_permissions(&resolved_target_path, perms)?;
         }
         
         // Atomically move the extracted directory into place
@@ -620,7 +653,50 @@ mod tests {
 
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
-        assert!(err_msg.contains("is a symlink, which is not allowed"));
+        assert!(err_msg.contains("is a symlink outside of the extracted directory"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_fetch_tool_tar_gz_internal_symlink_allowed() {
+        let temp = tempdir().unwrap();
+        let temp_path = temp.path();
+
+        let tar_gz_path = temp_path.join("mytool_symlink.tar.gz");
+        let tar_gz = fs::File::create(&tar_gz_path).unwrap();
+        let enc = flate2::write::GzEncoder::new(tar_gz, flate2::Compression::default());
+        let mut builder = tar::Builder::new(enc);
+
+        let data = b"#!/bin/sh\necho 'internal symlink target'\n";
+        let mut file_header = tar::Header::new_gnu();
+        file_header.set_size(data.len() as u64);
+        file_header.set_mode(0o644);
+        file_header.set_cksum();
+        builder.append_data(&mut file_header, "bin/real_tool", &data[..]).unwrap();
+
+        let mut sym_header = tar::Header::new_gnu();
+        sym_header.set_size(0);
+        sym_header.set_entry_type(tar::EntryType::Symlink);
+        sym_header.set_link_name("bin/real_tool").unwrap();
+        sym_header.set_cksum();
+        builder.append_data(&mut sym_header, "mytool", &[][..]).unwrap();
+        builder.into_inner().unwrap().finish().unwrap();
+
+        let sha256 = format!("{:x}", Sha256::digest(fs::read(&tar_gz_path).unwrap()));
+        let fake_home = temp_path.join("fake_home");
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+
+        let file_url = format!("file://{}", tar_gz_path.to_str().unwrap());
+        let result = fetch_tool("mytool", &file_url, "sha256", &sha256, None, &cache_dir);
+
+        assert!(result.is_ok(), "Internal symlink should be allowed: {:?}", result.err());
+        let target_path = result.unwrap();
+        assert!(target_path.exists());
+        assert!(target_path.is_symlink());
+
+        use std::os::unix::fs::PermissionsExt;
+        let real_meta = fs::metadata(cache_dir.join("bin/real_tool")).unwrap();
+        assert_eq!(real_meta.permissions().mode() & 0o111, 0o111);
     }
 
     #[test]
@@ -1205,7 +1281,7 @@ mod tests {
 
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
-        assert!(err_msg.contains("is a symlink, which is not allowed"));
+        assert!(err_msg.contains("is a symlink outside of the extracted directory"));
     }
 
     #[test]
@@ -1254,5 +1330,140 @@ mod tests {
             err_msg
         );
     }
+
+    #[test]
+    fn test_fetch_tool_appimage_default_apprun_success() {
+        let temp = tempdir().unwrap();
+        let temp_path = temp.path();
+
+        let appimage_path = temp_path.join("mytool.AppImage");
+        test_helpers::create_fake_appimage(
+            &appimage_path,
+            &[
+                ("AppRun", b"#!/bin/sh\necho 'hello from AppRun'\n", 0o755),
+                ("usr/bin/mytool", b"#!/bin/sh\necho 'hello from usr/bin/mytool'\n", 0o755),
+            ],
+            &[],
+        );
+
+        let sha256 = format!("{:x}", Sha256::digest(fs::read(&appimage_path).unwrap()));
+        let fake_home = temp_path.join("fake_home");
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+
+        let file_url = format!("file://{}", appimage_path.to_str().unwrap());
+        let result = fetch_tool("mytool", &file_url, "sha256", &sha256, None, &cache_dir);
+
+        assert!(result.is_ok(), "Failed to fetch AppImage: {:?}", result.err());
+        let target_path = result.unwrap();
+        assert!(target_path.exists());
+        assert!(target_path.ends_with("AppRun"), "Expected target_path to end with AppRun, got: {}", target_path.display());
+        assert!(cache_dir.join("usr/bin/mytool").exists());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = fs::metadata(&target_path).unwrap();
+            let mode = metadata.permissions().mode();
+            assert_eq!(mode & 0o111, 0o111, "AppRun is not executable!");
+        }
+    }
+
+    #[test]
+    fn test_fetch_tool_appimage_lowercase_extension_and_custom_archive_path() {
+        let temp = tempdir().unwrap();
+        let temp_path = temp.path();
+
+        let appimage_path = temp_path.join("mytool.appimage");
+        test_helpers::create_fake_appimage(
+            &appimage_path,
+            &[
+                ("AppRun", b"#!/bin/sh\necho 'hello from AppRun'\n", 0o755),
+                ("usr/bin/custom_bin", b"#!/bin/sh\necho 'hello from custom_bin'\n", 0o644),
+            ],
+            &[("usr/bin/link_to_bin", "custom_bin")],
+        );
+
+        let sha256 = format!("{:x}", Sha256::digest(fs::read(&appimage_path).unwrap()));
+        let fake_home = temp_path.join("fake_home");
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+
+        let file_url = format!("file://{}?download=1", appimage_path.to_str().unwrap());
+        let result = fetch_tool(
+            "mytool",
+            &file_url,
+            "sha256",
+            &sha256,
+            Some("usr/bin/custom_bin"),
+            &cache_dir,
+        );
+
+        assert!(result.is_ok(), "Failed to fetch .appimage: {:?}", result.err());
+        let target_path = result.unwrap();
+        assert!(target_path.exists());
+        assert!(target_path.ends_with("usr/bin/custom_bin"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = fs::metadata(&target_path).unwrap();
+            let mode = metadata.permissions().mode();
+            assert_eq!(mode & 0o111, 0o111, "Target binary is not executable!");
+            assert!(cache_dir.join("usr/bin/link_to_bin").is_symlink());
+        }
+    }
+
+    #[test]
+    fn test_fetch_tool_appimage_corrupt_error_propagated() {
+        let temp = tempdir().unwrap();
+        let temp_path = temp.path();
+
+        let corrupt_path = temp_path.join("corrupt.AppImage");
+        let data = b"not an ELF file at all";
+        fs::write(&corrupt_path, data).unwrap();
+
+        let sha256 = format!("{:x}", Sha256::digest(data));
+        let fake_home = temp_path.join("fake_home");
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+
+        let file_url = format!("file://{}", corrupt_path.to_str().unwrap());
+        let result = fetch_tool("corrupt", &file_url, "sha256", &sha256, None, &cache_dir);
+
+        assert!(result.is_err());
+        let err_msg = result.err().unwrap().to_string();
+        assert!(err_msg.contains("Failed to extract AppImage"), "Got: {}", err_msg);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_fetch_tool_appimage_relative_symlink_apprun_succeeds() {
+        let temp = tempdir().unwrap();
+        let temp_path = temp.path();
+
+        let appimage_path = temp_path.join("symlink_entry.AppImage");
+        test_helpers::create_fake_appimage(
+            &appimage_path,
+            &[("usr/bin/real_bin", b"#!/bin/sh\necho 'real'\n", 0o644)],
+            &[("AppRun", "usr/bin/real_bin")],
+        );
+
+        let sha256 = format!("{:x}", Sha256::digest(fs::read(&appimage_path).unwrap()));
+        let fake_home = temp_path.join("fake_home");
+        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+
+        let file_url = format!("file://{}", appimage_path.to_str().unwrap());
+        let result = fetch_tool("mytool", &file_url, "sha256", &sha256, None, &cache_dir);
+
+        assert!(result.is_ok(), "Expected relative AppRun symlink to succeed, got: {:?}", result.err());
+        let target_path = result.unwrap();
+        assert!(target_path.exists());
+        assert!(target_path.is_symlink());
+        assert!(target_path.ends_with("AppRun"));
+
+        use std::os::unix::fs::PermissionsExt;
+        let real_bin_meta = fs::metadata(cache_dir.join("usr/bin/real_bin")).unwrap();
+        assert_eq!(real_bin_meta.permissions().mode() & 0o111, 0o111, "Resolved target must be marked executable");
+    }
 }
+
+
 

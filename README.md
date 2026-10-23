@@ -10,7 +10,7 @@
 ## Key Features
 
 - **Layered version management:** `scrim.yaml` files define precisely which version of each tool to invoke based on the current working directory. All found `scrim.yaml` files are layered, with more local configuration taking precedence. See [Configuration](#configuration).
-- **Remote tool fetching:** Rather than maintain locally-installed tools, Scrim can fetch them from the network. It downloads the archive, unpacks it into a local cache, and executes the binary directly from the cache. Multiple versions of the same archive may be cached simultaneously. Downloads are hardened with a `sha256` hash, improving security and reproducibility.
+- **Remote tool fetching:** Rather than maintain locally-installed tools, Scrim can fetch them from the network. It downloads the archive or package (`.tar.gz`, `.tgz`, `.zip`, `.tar.xz`, `.txz`, `.xz`, `.AppImage`) or standalone binary, unpacks it into a local cache (extracting Type 2 AppImages natively without requiring FUSE), and executes the binary directly from the cache. Multiple versions of the same tool may be cached simultaneously. Downloads are hardened with a cryptographic digest (`sha256` or `sha512`), improving security and reproducibility.
 - **Easy installation:** Scrim is a single statically-linked binary. Tool links in your path can be automatically populated and kept in sync using `scrim links <DIR>`. There are no shell hooks; this will work in any shell and without user configuration.
 - **Non-blocking telemetry:** Get usage telemetry for the tools that are run, including full invocation information (coming soon). Telemetry is only performed once the proxied tool is called, removing telemetry from the critical path.
 - **Low overhead:** Scrim adds less than 2 milliseconds to the tool invocation.
@@ -50,7 +50,15 @@ tools:
   gofmt:
     template: go
     archive_path: go/bin/gofmt
+  vim:
+    url: https://github.com/vim/vim-appimage/releases/download/v9.2.1225/Vim-v9.2.1225.glibc2.34-x86_64.AppImage
+    sha256: fb78530264806ee19eb014d6e5344d42e3434b12f646d661f68042227ff34057
+  xxd:
+    template: vim
+    archive_path: usr/bin/xxd
 ```
+
+For fetched archives, `archive_path` defaults to `<tool_name>` at the root of the archive if omitted, or to `AppRun` for `.AppImage` / `.appimage` packages.
 
 ## Usage
 

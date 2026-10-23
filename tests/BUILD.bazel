@@ -1,4 +1,4 @@
-load("@rules_rust//rust:defs.bzl", "rust_test")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 rust_test(
     name = "scrim_integration_test",
@@ -13,6 +13,7 @@ rust_test(
         "RUST_TEST_THREADS": "1",
     },
     deps = [
+        ":test_helpers",
         "//src/version",
         "@crates//:tempfile",
     ],
@@ -26,3 +27,24 @@ rust_test(
     tags = ["manual"],
     deps = ["@crates//:tempfile"],
 )
+
+rust_library(
+    name = "test_helpers",
+    testonly = True,
+    srcs = ["test_helpers.rs"],
+    crate_root = "test_helpers.rs",
+    edition = "2021",
+    visibility = ["//src/fetcher:__pkg__"],
+    deps = [
+        "@crates//:backhand",
+    ],
+)
+
+rust_test(
+    name = "test_helpers_test",
+    crate = ":test_helpers",
+    deps = [
+        "@crates//:tempfile",
+    ],
+)
+

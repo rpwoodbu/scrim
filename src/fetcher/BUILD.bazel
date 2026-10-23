@@ -7,6 +7,7 @@ rust_library(
     edition = "2021",
     visibility = ["//src/bin:__pkg__"],
     deps = [
+        ":appimage",
         "//src/logger",
         "@crates//:flate2",
         "@crates//:lzma-rs",
@@ -22,6 +23,46 @@ rust_test(
     name = "fetcher_test",
     crate = ":fetcher",
     deps = [
+        "//tests:test_helpers",
         "@crates//:tempfile",
     ],
 )
+
+rust_library(
+    name = "appimage",
+    srcs = ["appimage.rs"],
+    crate_root = "appimage.rs",
+    edition = "2021",
+    deps = [
+        ":elf",
+        "@crates//:backhand",
+    ],
+)
+
+rust_test(
+    name = "appimage_test",
+    crate = ":appimage",
+    deps = [
+        "//tests:test_helpers",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_library(
+    name = "elf",
+    srcs = ["elf.rs"],
+    crate_root = "elf.rs",
+    edition = "2021",
+)
+
+rust_test(
+    name = "elf_test",
+    crate = ":elf",
+    deps = [
+        "//tests:test_helpers",
+    ],
+)
+
+
+
+

@@ -76,6 +76,10 @@ crate.spec(
     package = "clap",
     version = "4",
 )
+crate.spec(
+    package = "backhand",
+    version = "0.25",
+)
 crate.from_specs()
 use_repo(crate, "crates")
 
