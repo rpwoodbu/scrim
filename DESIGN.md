@@ -158,16 +158,19 @@ When a command (e.g., `node`) is invoked, Scrim follows this resolution logic:
     
     - **Configuration Validation**: To enforce the actionable UX principles, Scrim will explicitly reject invalid configurations with clear error messages rather than silently ignoring properties. Specifically:
         1. YAML parsing must be strict: unknown or misspelled fields must be rejected with an error rather than silently ignored.
-        2. `system_path` is mutually exclusive with all fetch-related properties (`url`, digest, `template`, `archive_path`).
+        2. `system_path` may be specified alongside fetch-related properties (`url` or `template`, along with `archive_path`). In this mode, `system_path` is preferred if the target executable exists on the system at execution time; if the file at `system_path` does not exist, Scrim falls back to fetching the tool. However, `system_path` cannot be combined with partial fetch definitions (all required fetch properties must still be validly specified).
         3. `template` is mutually exclusive with `url` and digests.
         4. Exactly one digest must be specified when fetching (digest algorithms are mutually exclusive).
-        5. If a tool requires fetching, both `url` and a digest must be present (neither can be provided without the other).
+        5. If a tool specifies `url` or a digest, both `url` and a digest must be present (neither can be provided without the other).
         6. `archive_path` cannot be provided if the tool doesn't resolve to a fetchable archive (i.e., no `url` or `template` is provided). If `archive_path` is omitted, Scrim defaults to `<tool_name>` at the root of the extracted directory for standard archives (`.tar.gz`, `.zip`, `.tar.xz`, etc.), and to `AppRun` at the root of the extracted directory for AppImage packages (`.AppImage`, `.appimage`).
         7. Empty tool configurations are invalid. Every tool must specify a `system_path`, a `url` (with a digest), or a `template`.
 
 3.  **Execution**:
-    - If the resolved version is a **Local Path** (via `system_path`), execute it directly.
-    - If the resolved version needs to be **Fetched**, check the tools cache directory (`<resolved_cache_dir>/tools/`). Following the [XDG Base Directory Specification][xdg-basedir], the base cache directory `<resolved_cache_dir>` is `<resolved_xdg_cache_home>/scrim`, where `<resolved_xdg_cache_home>` is resolved as:
+    - If the tool specifies both a `system_path` and fetch configuration (or template):
+      - At execution time, Scrim checks whether the executable at `system_path` exists on the filesystem. If it exists, Scrim uses the local executable directly.
+      - If the file at `system_path` does not exist, Scrim falls back to fetching the tool as described below.
+    - If only `system_path` is specified, execute it directly.
+    - If only fetch configuration (or `template`) is specified (or when falling back from a missing `system_path`), the resolved version needs to be **Fetched**: check the tools cache directory (`<resolved_cache_dir>/tools/`). Following the [XDG Base Directory Specification][xdg-basedir], the base cache directory `<resolved_cache_dir>` is `<resolved_xdg_cache_home>/scrim`, where `<resolved_xdg_cache_home>` is resolved as:
         1. Environment variable: `XDG_CACHE_HOME`, if set, non-empty, and an absolute path.
         2. Default location: `~/.cache` (falling back to `./.cache` if `$HOME` is unset).
       Two entries must exist in `<resolved_cache_dir>/tools/` for a cache hit: a subdirectory named `<digest_algorithm>:<digest_value>`, and a file named `<digest_algorithm>:<digest_value>.url` which must contain the specified URL. Caching by both `<digest_algorithm>:<digest_value>` and `url` ensures that updating the tool's `url` in `scrim.yaml` without changing the digest will not continue executing the old version.

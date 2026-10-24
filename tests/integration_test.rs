@@ -2189,4 +2189,100 @@ fn test_e2e_config_imports_circular_error() {
     assert!(stderr.contains("Circular import detected"));
 }
 
+#[test]
+fn test_e2e_system_path_fallback_to_url() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    // 1. Create a mock tool source binary to be fetched
+    let fetched_tool_src = temp_path.join("fetched_tool_src");
+    fs::write(
+        &fetched_tool_src,
+        "#!/bin/sh\necho \"Fetched Tool Executed: args=$*\"\n",
+    )
+    .unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&fetched_tool_src).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&fetched_tool_src, perms).unwrap();
+    }
+
+    let sha256 = compute_sha256(&fetched_tool_src);
+
+    // 2. Create an existing system tool binary
+    let existing_system_tool = temp_path.join("existing_system_tool");
+    fs::write(
+        &existing_system_tool,
+        "#!/bin/sh\necho \"System Tool Executed: args=$*\"\n",
+    )
+    .unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&existing_system_tool).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&existing_system_tool, perms).unwrap();
+    }
+
+    let nonexistent_system_tool = temp_path.join("nonexistent_system_tool");
+
+    // 3. Configure tools in scrim.yaml:
+    //    - tool1: system_path exists -> prefers system_path
+    //    - tool2: system_path does not exist -> falls back to url
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    let config_content = format!(
+        r#"
+telemetry: false
+tools:
+  tool_exists:
+    system_path: "{}"
+    url: "file://{}"
+    sha256: "{}"
+  tool_fallback:
+    system_path: "{}"
+    url: "file://{}"
+    sha256: "{}"
+"#,
+        existing_system_tool.to_str().unwrap(),
+        fetched_tool_src.to_str().unwrap(),
+        sha256,
+        nonexistent_system_tool.to_str().unwrap(),
+        fetched_tool_src.to_str().unwrap(),
+        sha256
+    );
+    fs::write(&scrim_yaml, config_content).unwrap();
+
+    // Set isolated home for cache
+    let fake_home = temp_path.join("fake_home");
+    fs::create_dir_all(&fake_home).unwrap();
+
+    // 4. Test tool_exists via `scrim run` -> executes system tool
+    let output1 = Command::new(&scrim_bin)
+        .args(["run", "tool_exists", "hello"])
+        .current_dir(temp_path)
+        .env("HOME", &fake_home)
+        .output()
+        .expect("Failed to run tool_exists");
+    assert!(output1.status.success());
+    let stdout1 = String::from_utf8(output1.stdout).unwrap();
+    assert!(stdout1.contains("System Tool Executed: args=hello"));
+
+    // 5. Test tool_fallback via `scrim run` -> falls back to fetched tool
+    let output2 = Command::new(&scrim_bin)
+        .args(["run", "tool_fallback", "world"])
+        .current_dir(temp_path)
+        .env("HOME", &fake_home)
+        .output()
+        .expect("Failed to run tool_fallback");
+    assert!(output2.status.success());
+    let stdout2 = String::from_utf8(output2.stdout).unwrap();
+    assert!(stdout2.contains("Fetched Tool Executed: args=world"));
+}
+
+
 

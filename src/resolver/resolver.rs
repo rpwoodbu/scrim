@@ -22,10 +22,20 @@ pub struct Digest {
     pub value: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchResolution {
+    pub url: String,
+    pub digest: Digest,
+    pub archive_path: Option<String>,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Resolution {
-    LocalPath(PathBuf),
-    Fetch { url: String, digest: Digest, archive_path: Option<String> },
+    SystemPath {
+        path: PathBuf,
+        fallback: Option<FetchResolution>,
+    },
+    Fetch(FetchResolution),
 }
 
 pub fn resolve_tool(program_name: &str, config: Option<&Config>) -> Result<Option<Resolution>, String> {
@@ -38,11 +48,6 @@ pub fn resolve_tool(program_name: &str, config: Option<&Config>) -> Result<Optio
             let has_digest = has_sha256 || has_sha512;
             let has_template = tool_config.template.is_some();
             let has_archive_path = tool_config.archive_path.is_some();
-
-            // Rule 1: `system_path` is mutually exclusive with all fetch-related properties
-            if has_system_path && (has_url || has_digest || has_template || has_archive_path) {
-                return Err(format!("Tool '{}' specifies 'system_path' which is mutually exclusive with fetch-related properties.", program_name));
-            }
 
             // Rule 2: `template` is mutually exclusive with `url` and digests
             if has_template && (has_url || has_digest) {
@@ -74,8 +79,12 @@ pub fn resolve_tool(program_name: &str, config: Option<&Config>) -> Result<Optio
                 return Err(format!("Tool '{}' has an empty configuration. Every tool must specify a 'system_path', 'url', or 'template'.", program_name));
             }
 
-            if let Some(path) = &tool_config.system_path {
-                return Ok(Some(Resolution::LocalPath(PathBuf::from(path))));
+            // If only system_path is specified, resolve to SystemPath with no fallback
+            if let (Some(path), false) = (&tool_config.system_path, has_url || has_template) {
+                return Ok(Some(Resolution::SystemPath {
+                    path: PathBuf::from(path),
+                    fallback: None,
+                }));
             }
 
             let mut resolved_url = tool_config.url.clone();
@@ -107,11 +116,19 @@ pub fn resolve_tool(program_name: &str, config: Option<&Config>) -> Result<Optio
             }
 
             if let (Some(url), Some(digest)) = (resolved_url, resolved_digest) {
-                return Ok(Some(Resolution::Fetch { 
-                    url, 
+                let fetch = FetchResolution {
+                    url,
                     digest,
                     archive_path: tool_config.archive_path.clone(),
-                }));
+                };
+                if let Some(path) = &tool_config.system_path {
+                    return Ok(Some(Resolution::SystemPath {
+                        path: PathBuf::from(path),
+                        fallback: Some(fetch),
+                    }));
+                } else {
+                    return Ok(Some(Resolution::Fetch(fetch)));
+                }
             } else if has_archive_path {
                 return Err(format!("Tool '{}' specifies 'archive_path' but the referenced template does not provide a fetchable archive.", program_name));
             }
@@ -145,7 +162,10 @@ mod tests {
         };
 
         let resolved = resolve_tool("node", Some(&config));
-        assert_eq!(resolved, Ok(Some(Resolution::LocalPath(PathBuf::from("/usr/bin/node")))));
+        assert_eq!(resolved, Ok(Some(Resolution::SystemPath {
+            path: PathBuf::from("/usr/bin/node"),
+            fallback: None,
+        })));
     }
 
     #[test]
@@ -162,11 +182,11 @@ mod tests {
         let config = Config { tools, telemetry: Some(true), ..Default::default() };
 
         let resolved = resolve_tool("go", Some(&config));
-        assert_eq!(resolved, Ok(Some(Resolution::Fetch { 
+        assert_eq!(resolved, Ok(Some(Resolution::Fetch(FetchResolution { 
             url: "https://go.dev/dl/go.tar.gz".to_string(),
             digest: Digest { algorithm: DigestAlgorithm::Sha256, value: "abc12345".to_string() },
             archive_path: None,
-        })));
+        }))));
     }
 
     #[test]
@@ -183,11 +203,11 @@ mod tests {
         let config = Config { tools, telemetry: Some(true), ..Default::default() };
 
         let resolved = resolve_tool("go", Some(&config));
-        assert_eq!(resolved, Ok(Some(Resolution::Fetch { 
+        assert_eq!(resolved, Ok(Some(Resolution::Fetch(FetchResolution { 
             url: "https://go.dev/dl/go.tar.gz".to_string(),
             digest: Digest { algorithm: DigestAlgorithm::Sha512, value: "def67890".to_string() },
             archive_path: None,
-        })));
+        }))));
     }
 
     #[test]
@@ -212,11 +232,11 @@ mod tests {
         let config = Config { tools, telemetry: Some(true), ..Default::default() };
 
         let resolved = resolve_tool("gofmt", Some(&config));
-        assert_eq!(resolved, Ok(Some(Resolution::Fetch { 
+        assert_eq!(resolved, Ok(Some(Resolution::Fetch(FetchResolution { 
             url: "https://go.dev/dl/go.tar.gz".to_string(),
             digest: Digest { algorithm: DigestAlgorithm::Sha256, value: "abc12345".to_string() },
             archive_path: Some("go/bin/gofmt".to_string()),
-        })));
+        }))));
     }
 
     #[test]
@@ -255,8 +275,8 @@ mod tests {
     #[test]
     fn test_resolve_validation_errors() {
         let mut tools = BTreeMap::new();
-        // Path with fetch-related property
-        tools.insert("err_path".to_string(), ToolConfig {
+        // Path with invalid fetch property (url without digest)
+        tools.insert("err_path_missing_digest".to_string(), ToolConfig {
             system_path: Some("/bin/node".to_string()),
             url: Some("http://example.com/node.tar.gz".to_string()),
             sha256: None,
@@ -330,8 +350,8 @@ mod tests {
         let config = Config { tools, telemetry: Some(true), ..Default::default() };
 
         assert_eq!(
-            resolve_tool("err_path", Some(&config)),
-            Err("Tool 'err_path' specifies 'system_path' which is mutually exclusive with fetch-related properties.".to_string())
+            resolve_tool("err_path_missing_digest", Some(&config)),
+            Err("Tool 'err_path_missing_digest' specifies 'url' without a digest. Both must be provided together.".to_string())
         );
         assert_eq!(
             resolve_tool("err_template", Some(&config)),
@@ -372,6 +392,72 @@ mod tests {
         assert_eq!(
             resolve_tool("empty_tool", Some(&config2)),
             Err("Tool 'empty_tool' has an empty configuration. Every tool must specify a 'system_path', 'url', or 'template'.".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_system_path_with_fetch_fallback() {
+        let mut tools = BTreeMap::new();
+        // 1. Tool where both system_path and fetch are defined
+        tools.insert("tool_with_fallback".to_string(), ToolConfig {
+            system_path: Some("/bin/custom_tool".to_string()),
+            url: Some("http://example.com/tool.tar.gz".to_string()),
+            sha256: Some("sha256val".to_string()),
+            sha512: None,
+            archive_path: Some("bin/tool".to_string()),
+            template: None,
+        });
+
+        // 2. Tool where system_path is defined with a template
+        tools.insert("tool_template_base".to_string(), ToolConfig {
+            system_path: None,
+            url: Some("http://example.com/base.tar.gz".to_string()),
+            sha256: Some("base_sha256".to_string()),
+            sha512: None,
+            archive_path: None,
+            template: None,
+        });
+        tools.insert("tool_template_fallback".to_string(), ToolConfig {
+            system_path: Some("/bin/subtool".to_string()),
+            url: None,
+            sha256: None,
+            sha512: None,
+            archive_path: Some("bin/subtool".to_string()),
+            template: Some("tool_template_base".to_string()),
+        });
+
+        let config = Config { tools, telemetry: Some(false), ..Default::default() };
+
+        // Verification 1: Both defined -> SystemPath with fallback
+        assert_eq!(
+            resolve_tool("tool_with_fallback", Some(&config)),
+            Ok(Some(Resolution::SystemPath {
+                path: PathBuf::from("/bin/custom_tool"),
+                fallback: Some(FetchResolution {
+                    url: "http://example.com/tool.tar.gz".to_string(),
+                    digest: Digest {
+                        algorithm: DigestAlgorithm::Sha256,
+                        value: "sha256val".to_string(),
+                    },
+                    archive_path: Some("bin/tool".to_string()),
+                }),
+            }))
+        );
+
+        // Verification 2: System path with template -> SystemPath with fallback
+        assert_eq!(
+            resolve_tool("tool_template_fallback", Some(&config)),
+            Ok(Some(Resolution::SystemPath {
+                path: PathBuf::from("/bin/subtool"),
+                fallback: Some(FetchResolution {
+                    url: "http://example.com/base.tar.gz".to_string(),
+                    digest: Digest {
+                        algorithm: DigestAlgorithm::Sha256,
+                        value: "base_sha256".to_string(),
+                    },
+                    archive_path: Some("bin/subtool".to_string()),
+                }),
+            }))
         );
     }
 }

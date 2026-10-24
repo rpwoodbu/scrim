@@ -3,7 +3,7 @@ use config::Config;
 use fetcher::fetch_tool;
 use linker::create_links;
 use logger::scrim_error;
-use resolver::{resolve_tool, Resolution};
+use resolver::{resolve_tool, FetchResolution, Resolution};
 use telemetry::report_usage;
 use version::format_version;
 
@@ -158,34 +158,14 @@ fn execute_tool(program_name: &str, tool_args: &[std::ffi::OsString], app_env: &
     match resolution {
         Ok(Some(res)) => {
             let target_path = match res {
-                Resolution::LocalPath(p) => p,
-                Resolution::Fetch {
-                    url,
-                    digest,
-                    archive_path,
-                } => {
-                    let base_cache = config::resolve_cache_dir(
-                        app_env.xdg_cache_home.as_deref(),
-                        app_env.home_dir.as_deref(),
-                    );
-                    let tools_dir = base_cache.join("tools");
-                    let cache_dir_name = format!("{}:{}", digest.algorithm.name(), digest.value);
-                    let cache_dir = tools_dir.join(cache_dir_name);
-                    match fetch_tool(
-                        program_name,
-                        &url,
-                        digest.algorithm.name(),
-                        &digest.value,
-                        archive_path.as_deref(),
-                        &cache_dir,
-                    ) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            scrim_error!("Failed to fetch tool '{}': {}", program_name, e);
-                            std::process::exit(1);
-                        }
+                Resolution::SystemPath { path, fallback } => {
+                    if path.exists() || fallback.is_none() {
+                        path
+                    } else {
+                        execute_fetch(program_name, &fallback.unwrap(), app_env)
                     }
                 }
+                Resolution::Fetch(fetch_res) => execute_fetch(program_name, &fetch_res, app_env),
             };
 
             // Prepare the command
@@ -223,6 +203,30 @@ fn execute_tool(program_name: &str, tool_args: &[std::ffi::OsString], app_env: &
         }
         Err(e) => {
             scrim_error!("{}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn execute_fetch(program_name: &str, fetch: &FetchResolution, app_env: &AppEnvironment) -> PathBuf {
+    let base_cache = config::resolve_cache_dir(
+        app_env.xdg_cache_home.as_deref(),
+        app_env.home_dir.as_deref(),
+    );
+    let tools_dir = base_cache.join("tools");
+    let cache_dir_name = format!("{}:{}", fetch.digest.algorithm.name(), fetch.digest.value);
+    let cache_dir = tools_dir.join(cache_dir_name);
+    match fetch_tool(
+        program_name,
+        &fetch.url,
+        fetch.digest.algorithm.name(),
+        &fetch.digest.value,
+        fetch.archive_path.as_deref(),
+        &cache_dir,
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            scrim_error!("Failed to fetch tool '{}': {}", program_name, e);
             std::process::exit(1);
         }
     }
