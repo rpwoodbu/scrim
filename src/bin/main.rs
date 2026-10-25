@@ -1,6 +1,6 @@
 use cli::{parse_management_cli, CliCommand, CliParseResult};
 use config::Config;
-use fetcher::{cached_binary_path, fetch_tool, tool_cache_dir};
+use fetcher::{cached_binary_path, fetch_tool};
 use linker::create_links;
 use logger::scrim_error;
 use resolver::{resolve_tool, Resolution};
@@ -192,11 +192,6 @@ fn resolve_target_binary_path(
         app_env.xdg_cache_home.as_deref(),
         app_env.home_dir.as_deref(),
     );
-    let cache_dir = tool_cache_dir(
-        &base_cache,
-        fetch_res.digest.algorithm.name(),
-        &fetch_res.digest.value,
-    );
 
     if fetch_if_missing {
         match fetch_tool(
@@ -205,7 +200,7 @@ fn resolve_target_binary_path(
             fetch_res.digest.algorithm.name(),
             &fetch_res.digest.value,
             fetch_res.archive_path.as_deref(),
-            &cache_dir,
+            &base_cache,
         ) {
             Ok(p) => p,
             Err(e) => {
@@ -217,8 +212,10 @@ fn resolve_target_binary_path(
         match cached_binary_path(
             program_name,
             &fetch_res.url,
+            fetch_res.digest.algorithm.name(),
+            &fetch_res.digest.value,
             fetch_res.archive_path.as_deref(),
-            &cache_dir,
+            &base_cache,
         ) {
             Ok(p) => p,
             Err(e) => {

@@ -34,7 +34,7 @@ fn record_cached_url(url_file: &Path, url: &str) -> io::Result<()> {
     Ok(())
 }
 
-pub fn tool_cache_dir(base_cache_dir: &Path, digest_algorithm: &str, digest_value: &str) -> PathBuf {
+fn tool_cache_dir(base_cache_dir: &Path, digest_algorithm: &str, digest_value: &str) -> PathBuf {
     base_cache_dir
         .join("tools")
         .join(format!("{}:{}", digest_algorithm, digest_value))
@@ -43,9 +43,12 @@ pub fn tool_cache_dir(base_cache_dir: &Path, digest_algorithm: &str, digest_valu
 pub fn cached_binary_path(
     tool_name: &str,
     url: &str,
+    digest_algorithm: &str,
+    digest_value: &str,
     archive_path: Option<&str>,
-    cache_dir: &Path,
+    base_cache_dir: &Path,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let cache_dir = tool_cache_dir(base_cache_dir, digest_algorithm, digest_value);
     Ok(cache_dir.join(resolve_relative_bin_path(tool_name, url, archive_path)?))
 }
 
@@ -55,13 +58,11 @@ pub fn fetch_tool(
     digest_algorithm: &str,
     digest_value: &str,
     archive_path: Option<&str>,
-    cache_dir: &Path,
+    base_cache_dir: &Path,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let tools_dir = match cache_dir.parent() {
-        Some(p) if !p.as_os_str().is_empty() => p,
-        _ => Path::new("."),
-    };
+    let tools_dir = base_cache_dir.join("tools");
     let cache_key = format!("{}:{}", digest_algorithm, digest_value);
+    let cache_dir = tools_dir.join(&cache_key);
     let url_file = tools_dir.join(format!("{}.url", cache_key));
 
     let rel_bin_path = resolve_relative_bin_path(tool_name, url, archive_path)?;
@@ -73,10 +74,10 @@ pub fn fetch_tool(
 
     let archive_format = ArchiveFormat::from_url(url);
 
-    fs::create_dir_all(tools_dir)?;
+    fs::create_dir_all(&tools_dir)?;
 
     // Download to a temporary file in the tools directory
-    let mut temp_file = tempfile::NamedTempFile::new_in(tools_dir)?;
+    let mut temp_file = tempfile::NamedTempFile::new_in(&tools_dir)?;
     let mut hw = HashingWriter::new(&mut temp_file, digest_algorithm)?;
 
     if let Some(local_path) = url.strip_prefix("file://") {
@@ -107,12 +108,12 @@ pub fn fetch_tool(
         logger::scrim_progress!("Unpacking {} archive...", tool_name);
 
         // Extract to a TempDir first to ensure atomicity
-        let unpack_dir = tempfile::TempDir::new_in(tools_dir)?;
+        let unpack_dir = tempfile::TempDir::new_in(&tools_dir)?;
         let archive_file = temp_file.reopen()?;
         extract_and_prepare_archive(
             format,
             archive_file,
-            tools_dir,
+            &tools_dir,
             unpack_dir.path(),
             &rel_bin_path,
         )?;
@@ -181,26 +182,26 @@ mod tests {
 
     #[test]
     fn test_cached_binary_path_archive_and_binary() {
-        let dir = Path::new("/cache/tools/sha256:1234");
+        let dir = Path::new("/cache");
         // Non-archive
-        let p1 = cached_binary_path("mytool", "https://example.com/bin", None, dir).unwrap();
+        let p1 = cached_binary_path("mytool", "https://example.com/bin", "sha256", "1234", None, dir).unwrap();
         assert_eq!(p1, PathBuf::from("/cache/tools/sha256:1234/mytool"));
 
         // Archive with custom path
-        let p2 = cached_binary_path("mytool", "https://example.com/bin.tar.gz", Some("sub/bin"), dir).unwrap();
+        let p2 = cached_binary_path("mytool", "https://example.com/bin.tar.gz", "sha256", "1234", Some("sub/bin"), dir).unwrap();
         assert_eq!(p2, PathBuf::from("/cache/tools/sha256:1234/sub/bin"));
 
         // Archive with default path
-        let p3 = cached_binary_path("mytool", "https://example.com/bin.tar.gz", None, dir).unwrap();
+        let p3 = cached_binary_path("mytool", "https://example.com/bin.tar.gz", "sha256", "1234", None, dir).unwrap();
         assert_eq!(p3, PathBuf::from("/cache/tools/sha256:1234/mytool"));
 
         // AppImage default path
-        let p4 = cached_binary_path("mytool", "https://example.com/pkg.AppImage", None, dir).unwrap();
+        let p4 = cached_binary_path("mytool", "https://example.com/pkg.AppImage", "sha256", "1234", None, dir).unwrap();
         assert_eq!(p4, PathBuf::from("/cache/tools/sha256:1234/AppRun"));
 
         // Invalid archive paths
-        assert!(cached_binary_path("mytool", "https://example.com/bin.tar.gz", Some("/abs/path"), dir).is_err());
-        assert!(cached_binary_path("mytool", "https://example.com/bin.tar.gz", Some("sub/../bad"), dir).is_err());
+        assert!(cached_binary_path("mytool", "https://example.com/bin.tar.gz", "sha256", "1234", Some("/abs/path"), dir).is_err());
+        assert!(cached_binary_path("mytool", "https://example.com/bin.tar.gz", "sha256", "1234", Some("sub/../bad"), dir).is_err());
     }
 
     #[test]
@@ -217,10 +218,10 @@ mod tests {
         let sha256 = format!("{:x}", hasher.finalize());
 
         let fake_home = temp_path.join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let base_cache = fake_home.join(".cache/scrim");
 
         let file_url = format!("file://{}", mock_src.to_str().unwrap());
-        let result = fetch_tool("my_test_tool", &file_url, "sha256", &sha256, None, &cache_dir);
+        let result = fetch_tool("my_test_tool", &file_url, "sha256", &sha256, None, &base_cache);
 
         assert!(result.is_ok());
         let target_path = result.unwrap();
@@ -255,10 +256,10 @@ mod tests {
         let actual_sha256 = format!("{:x}", hasher.finalize());
 
         let fake_home = temp_path.join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join("sha256:incorrect_sha_hash");
+        let base_cache = fake_home.join(".cache/scrim");
 
         let file_url = format!("file://{}", mock_src.to_str().unwrap());
-        let result = fetch_tool("my_test_tool", &file_url, "sha256", "incorrect_sha_hash", None, &cache_dir);
+        let result = fetch_tool("my_test_tool", &file_url, "sha256", "incorrect_sha_hash", None, &base_cache);
 
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
@@ -281,10 +282,10 @@ mod tests {
         let sha512 = format!("{:x}", hasher.finalize());
 
         let fake_home = temp_path.join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha512:{}", sha512));
+        let base_cache = fake_home.join(".cache/scrim");
 
         let file_url = format!("file://{}", mock_src.to_str().unwrap());
-        let result = fetch_tool("my_sha512_tool", &file_url, "sha512", &sha512, None, &cache_dir);
+        let result = fetch_tool("my_sha512_tool", &file_url, "sha512", &sha512, None, &base_cache);
 
         assert!(result.is_ok());
         let target_path = result.unwrap();
@@ -296,8 +297,7 @@ mod tests {
         assert_eq!(fs::read_to_string(&url_file).unwrap().trim(), file_url.trim());
 
         // Now test mismatch with sha512
-        let cache_dir_bad = fake_home.join(".cache/scrim/tools").join("sha512:bad_hash");
-        let result_bad = fetch_tool("my_sha512_tool", &file_url, "sha512", "bad_hash", None, &cache_dir_bad);
+        let result_bad = fetch_tool("my_sha512_tool", &file_url, "sha512", "bad_hash", None, &base_cache);
         assert!(result_bad.is_err());
         let err_msg = result_bad.err().unwrap().to_string();
         assert!(err_msg.contains("SHA512 verification failed for my_sha512_tool."));
@@ -309,10 +309,10 @@ mod tests {
     fn test_fetch_tool_download_failure() {
         let temp = tempdir().unwrap();
         let fake_home = temp.path().join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join("sha256:any_sha256");
+        let base_cache = fake_home.join(".cache/scrim");
 
         let file_url = "file:///tmp/this_file_does_not_exist_scrim_test_12345";
-        let result = fetch_tool("my_test_tool", file_url, "sha256", "any_sha256", None, &cache_dir);
+        let result = fetch_tool("my_test_tool", file_url, "sha256", "any_sha256", None, &base_cache);
 
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
@@ -324,7 +324,7 @@ mod tests {
     fn test_fetch_tool_http_404_failure() {
         let temp = tempdir().unwrap();
         let fake_home = temp.path().join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join("sha256:any_sha256");
+        let base_cache = fake_home.join(".cache/scrim");
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -339,7 +339,7 @@ mod tests {
         });
 
         let url = format!("http://127.0.0.1:{}/not_found", port);
-        let result = fetch_tool("my_test_tool", &url, "sha256", "any_sha256", None, &cache_dir);
+        let result = fetch_tool("my_test_tool", &url, "sha256", "any_sha256", None, &base_cache);
 
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
@@ -350,10 +350,10 @@ mod tests {
     fn test_fetch_tool_network_error() {
         let temp = tempdir().unwrap();
         let fake_home = temp.path().join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join("sha256:any_sha256");
+        let base_cache = fake_home.join(".cache/scrim");
 
         let url = "http://127.0.0.1:1";
-        let result = fetch_tool("my_test_tool", url, "sha256", "any_sha256", None, &cache_dir);
+        let result = fetch_tool("my_test_tool", url, "sha256", "any_sha256", None, &base_cache);
 
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
@@ -383,10 +383,10 @@ mod tests {
         let sha256 = format!("{:x}", hasher.finalize());
 
         let fake_home = temp_path.join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let base_cache = fake_home.join(".cache/scrim");
 
         let file_url = format!("file://{}", tar_gz_path.to_str().unwrap());
-        let result = fetch_tool("my_test_tool", &file_url, "sha256", &sha256, Some("bin/mytool"), &cache_dir);
+        let result = fetch_tool("my_test_tool", &file_url, "sha256", &sha256, Some("bin/mytool"), &base_cache);
 
         assert!(result.is_ok());
         let target_path = result.unwrap();
@@ -428,10 +428,10 @@ mod tests {
         let sha256 = format!("{:x}", hasher.finalize());
 
         let fake_home = temp_path.join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let base_cache = fake_home.join(".cache/scrim");
 
         let file_url = format!("file://{}", zip_path.to_str().unwrap());
-        let result = fetch_tool("my_test_tool", &file_url, "sha256", &sha256, Some("bin/mytool"), &cache_dir);
+        let result = fetch_tool("my_test_tool", &file_url, "sha256", &sha256, Some("bin/mytool"), &base_cache);
 
         assert!(result.is_ok());
         let target_path = result.unwrap();
@@ -451,17 +451,17 @@ mod tests {
     fn test_fetch_tool_archive_path_validation() {
         let temp = tempdir().unwrap();
         let fake_home = temp.path().join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join("sha256:any_sha");
+        let base_cache = fake_home.join(".cache/scrim");
 
         let url = "https://example.com/tool.tar.gz";
 
         // Test absolute path
-        let res_absolute = fetch_tool("my_tool", url, "sha256", "any_sha", Some("/absolute/path"), &cache_dir);
+        let res_absolute = fetch_tool("my_tool", url, "sha256", "any_sha", Some("/absolute/path"), &base_cache);
         assert!(res_absolute.is_err());
         assert!(res_absolute.err().unwrap().to_string().contains("must be a relative path"));
 
         // Test '..' traversal
-        let res_traversal = fetch_tool("my_tool", url, "sha256", "any_sha", Some("bin/../secret"), &cache_dir);
+        let res_traversal = fetch_tool("my_tool", url, "sha256", "any_sha", Some("bin/../secret"), &base_cache);
         assert!(res_traversal.is_err());
         assert!(res_traversal.err().unwrap().to_string().contains("without '..'"));
     }
@@ -490,10 +490,10 @@ mod tests {
         let sha256 = format!("{:x}", hasher.finalize());
 
         let fake_home = temp_path.join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let base_cache = fake_home.join(".cache/scrim");
 
         let file_url = format!("file://{}", zip_path.to_str().unwrap());
-        let result = fetch_tool("default_tool", &file_url, "sha256", &sha256, None, &cache_dir);
+        let result = fetch_tool("default_tool", &file_url, "sha256", &sha256, None, &base_cache);
 
         assert!(result.is_ok());
         let target_path = result.unwrap();
@@ -525,10 +525,10 @@ mod tests {
         let sha256 = format!("{:x}", hasher.finalize());
 
         let fake_home = temp_path.join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let base_cache = fake_home.join(".cache/scrim");
 
         let file_url = format!("file://{}", tar_gz_path.to_str().unwrap());
-        let result = fetch_tool("mytool", &file_url, "sha256", &sha256, None, &cache_dir);
+        let result = fetch_tool("mytool", &file_url, "sha256", &sha256, None, &base_cache);
 
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
@@ -563,10 +563,11 @@ mod tests {
 
         let sha256 = format!("{:x}", Sha256::digest(fs::read(&tar_gz_path).unwrap()));
         let fake_home = temp_path.join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let base_cache = fake_home.join(".cache/scrim");
+        let cache_dir = tool_cache_dir(&base_cache, "sha256", &sha256);
 
         let file_url = format!("file://{}", tar_gz_path.to_str().unwrap());
-        let result = fetch_tool("mytool", &file_url, "sha256", &sha256, None, &cache_dir);
+        let result = fetch_tool("mytool", &file_url, "sha256", &sha256, None, &base_cache);
 
         assert!(result.is_ok(), "Internal symlink should be allowed: {:?}", result.err());
         let target_path = result.unwrap();
@@ -605,10 +606,10 @@ mod tests {
         });
 
         let fake_home = temp_path.join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let base_cache = fake_home.join(".cache/scrim");
 
         let url = format!("http://127.0.0.1:{}/binary", port);
-        let result = fetch_tool("http_tool", &url, "sha256", &sha256, None, &cache_dir);
+        let result = fetch_tool("http_tool", &url, "sha256", &sha256, None, &base_cache);
 
         assert!(result.is_ok());
         let target_path = result.unwrap();
@@ -646,10 +647,10 @@ mod tests {
         });
 
         let fake_home = temp_path.join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let base_cache = fake_home.join(".cache/scrim");
 
         let url = format!("http://[::1]:{}/binary", port);
-        let result = fetch_tool("http_tool_ipv6", &url, "sha256", &sha256, None, &cache_dir);
+        let result = fetch_tool("http_tool_ipv6", &url, "sha256", &sha256, None, &base_cache);
 
         assert!(result.is_ok(), "Failed IPv6 fetch: {:?}", result.err());
         let target_path = result.unwrap();
@@ -664,7 +665,7 @@ mod tests {
 
         let mock_src_dir = temp_path.join("mock_src_dir_ipv6");
         fs::create_dir_all(mock_src_dir.join("bin")).unwrap();
-        fs::write(mock_src_dir.join("bin").join("mytool_ipv6"), "echo 'hello ipv6 archive'").unwrap();
+        fs::write(mock_src_dir.join("bin").join("mytool_ipv6"), "echo 'hello archive'").unwrap();
 
         let tar_gz_path = temp_path.join("mytool_ipv6.tar.gz");
         let tar_gz = fs::File::create(&tar_gz_path).unwrap();
@@ -699,10 +700,10 @@ mod tests {
         });
 
         let fake_home = temp_path.join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let base_cache = fake_home.join(".cache/scrim");
 
         let url = format!("http://[::1]:{}/mytool_ipv6.tar.gz", port);
-        let result = fetch_tool("mytool_ipv6", &url, "sha256", &sha256, Some("bin/mytool_ipv6"), &cache_dir);
+        let result = fetch_tool("mytool_ipv6", &url, "sha256", &sha256, Some("bin/mytool_ipv6"), &base_cache);
 
         assert!(result.is_ok(), "Failed IPv6 archive fetch: {:?}", result.err());
         let target_path = result.unwrap();
@@ -722,11 +723,11 @@ mod tests {
     fn test_fetch_tool_http_ipv6_network_error() {
         let temp = tempdir().unwrap();
         let fake_home = temp.path().join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join("sha256:any_sha256");
+        let base_cache = fake_home.join(".cache/scrim");
 
         // Port 1 on IPv6 loopback is not listening
         let url = "http://[::1]:1";
-        let result = fetch_tool("ipv6_error_tool", url, "sha256", "any_sha256", None, &cache_dir);
+        let result = fetch_tool("ipv6_error_tool", url, "sha256", "any_sha256", None, &base_cache);
 
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
@@ -754,10 +755,10 @@ mod tests {
         let sha256 = format!("{:x}", Sha256::digest(fs::read(&tar_gz_path).unwrap()));
 
         let fake_home = temp_path.join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let base_cache = fake_home.join(".cache/scrim");
 
         let file_url = format!("file://{}", tar_gz_path.to_str().unwrap());
-        let result = fetch_tool("mytool", &file_url, "sha256", &sha256, Some("expected_binary"), &cache_dir);
+        let result = fetch_tool("mytool", &file_url, "sha256", &sha256, Some("expected_binary"), &base_cache);
 
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
@@ -783,10 +784,10 @@ mod tests {
         let sha256 = format!("{:x}", Sha256::digest(fs::read(&tgz_path).unwrap()));
 
         let fake_home = temp_path.join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let base_cache = fake_home.join(".cache/scrim");
 
         let file_url = format!("file://{}", tgz_path.to_str().unwrap());
-        let result = fetch_tool("mytool", &file_url, "sha256", &sha256, None, &cache_dir);
+        let result = fetch_tool("mytool", &file_url, "sha256", &sha256, None, &base_cache);
 
         assert!(result.is_ok());
         let target_path = result.unwrap();
@@ -805,10 +806,10 @@ mod tests {
         let sha256 = format!("{:x}", Sha256::digest(b"not a valid tar.gz file"));
 
         let fake_home = temp_path.join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let base_cache = fake_home.join(".cache/scrim");
 
         let file_url = format!("file://{}", corrupt_path.to_str().unwrap());
-        let result = fetch_tool("corrupt_tool", &file_url, "sha256", &sha256, None, &cache_dir);
+        let result = fetch_tool("corrupt_tool", &file_url, "sha256", &sha256, None, &base_cache);
 
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
@@ -826,10 +827,10 @@ mod tests {
         let sha256 = format!("{:x}", Sha256::digest(b"not a valid zip file"));
 
         let fake_home = temp_path.join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let base_cache = fake_home.join(".cache/scrim");
 
         let file_url = format!("file://{}", corrupt_path.to_str().unwrap());
-        let result = fetch_tool("corrupt_tool", &file_url, "sha256", &sha256, None, &cache_dir);
+        let result = fetch_tool("corrupt_tool", &file_url, "sha256", &sha256, None, &base_cache);
 
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
@@ -841,9 +842,10 @@ mod tests {
         let temp = tempdir().unwrap();
         let temp_path = temp.path();
         let fake_home = temp_path.join("fake_home");
+        let base_cache = fake_home.join(".cache/scrim");
 
         let sha256 = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let cache_dir = tool_cache_dir(&base_cache, "sha256", sha256);
         fs::create_dir_all(&cache_dir).unwrap();
         let cached_bin = cache_dir.join("cached_tool");
         fs::write(&cached_bin, b"already cached").unwrap();
@@ -851,7 +853,7 @@ mod tests {
         let url_file = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}.url", sha256));
         fs::write(&url_file, "http://invalid.invalid/never_called\n").unwrap();
 
-        let result = fetch_tool("cached_tool", "http://invalid.invalid/never_called", "sha256", sha256, None, &cache_dir);
+        let result = fetch_tool("cached_tool", "http://invalid.invalid/never_called", "sha256", sha256, None, &base_cache);
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), cached_bin);
@@ -862,15 +864,16 @@ mod tests {
         let temp = tempdir().unwrap();
         let temp_path = temp.path();
         let fake_home = temp_path.join("fake_home");
+        let base_cache = fake_home.join(".cache/scrim");
 
         let sha256 = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let cache_dir = tool_cache_dir(&base_cache, "sha256", sha256);
         fs::create_dir_all(&cache_dir).unwrap();
         let cached_bin = cache_dir.join("cached_tool");
         fs::write(&cached_bin, b"already cached").unwrap();
 
         // Without <sha256>.url, fetch_tool must not return the cached binary and must attempt download
-        let result = fetch_tool("cached_tool", "http://invalid.invalid/never_called", "sha256", sha256, None, &cache_dir);
+        let result = fetch_tool("cached_tool", "http://invalid.invalid/never_called", "sha256", sha256, None, &base_cache);
 
         assert!(result.is_err());
         assert!(result.err().unwrap().to_string().contains("Failed to download tool"));
@@ -881,9 +884,10 @@ mod tests {
         let temp = tempdir().unwrap();
         let temp_path = temp.path();
         let fake_home = temp_path.join("fake_home");
+        let base_cache = fake_home.join(".cache/scrim");
 
         let sha256 = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef";
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let cache_dir = tool_cache_dir(&base_cache, "sha256", sha256);
         fs::create_dir_all(&cache_dir).unwrap();
         let cached_bin = cache_dir.join("cached_tool");
         fs::write(&cached_bin, b"already cached").unwrap();
@@ -892,7 +896,7 @@ mod tests {
         fs::write(&url_file, "http://previously.downloaded/tool\n").unwrap();
 
         // With mismatched URL in <sha256>.url, fetch_tool must not use cache and must attempt download
-        let result = fetch_tool("cached_tool", "http://invalid.invalid/never_called", "sha256", sha256, None, &cache_dir);
+        let result = fetch_tool("cached_tool", "http://invalid.invalid/never_called", "sha256", sha256, None, &base_cache);
 
         assert!(result.is_err());
         assert!(result.err().unwrap().to_string().contains("Failed to download tool"));
@@ -903,6 +907,7 @@ mod tests {
         let temp = tempdir().unwrap();
         let temp_path = temp.path();
         let fake_home = temp_path.join("fake_home");
+        let base_cache = fake_home.join(".cache/scrim");
 
         // 1. Initial cached version (v1)
         let old_src = temp_path.join("v1_tool");
@@ -910,8 +915,7 @@ mod tests {
         let old_sha256 = format!("{:x}", Sha256::digest(b"version 1 binary"));
         let old_url = format!("file://{}", old_src.to_str().unwrap());
 
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", old_sha256));
-        let res_v1 = fetch_tool("my_tool", &old_url, "sha256", &old_sha256, None, &cache_dir);
+        let res_v1 = fetch_tool("my_tool", &old_url, "sha256", &old_sha256, None, &base_cache);
         assert!(res_v1.is_ok());
 
         // 2. User updates URL to v2 but leaves sha256 as old_sha256
@@ -920,7 +924,7 @@ mod tests {
         let new_sha256 = format!("{:x}", Sha256::digest(b"version 2 binary with different content"));
         let new_url = format!("file://{}", new_src.to_str().unwrap());
 
-        let res_v2 = fetch_tool("my_tool", &new_url, "sha256", &old_sha256, None, &cache_dir);
+        let res_v2 = fetch_tool("my_tool", &new_url, "sha256", &old_sha256, None, &base_cache);
         assert!(res_v2.is_err());
         let err_msg = res_v2.err().unwrap().to_string();
         assert!(err_msg.contains("SHA256 verification failed for my_tool."));
@@ -933,6 +937,7 @@ mod tests {
         let temp = tempdir().unwrap();
         let temp_path = temp.path();
         let fake_home = temp_path.join("fake_home");
+        let base_cache = fake_home.join(".cache/scrim");
 
         let content = b"identical tool payload";
         let sha256 = format!("{:x}", Sha256::digest(content));
@@ -945,10 +950,8 @@ mod tests {
         fs::write(&src2, content).unwrap();
         let url2 = format!("file://{}", src2.to_str().unwrap());
 
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
-
         // Fetch from url1
-        let res1 = fetch_tool("multi_tool", &url1, "sha256", &sha256, None, &cache_dir);
+        let res1 = fetch_tool("multi_tool", &url1, "sha256", &sha256, None, &base_cache);
         assert!(res1.is_ok());
 
         let url_file = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}.url", sha256));
@@ -957,7 +960,7 @@ mod tests {
         assert!(file_content.contains(&url1));
 
         // Fetch from url2 (mirror)
-        let res2 = fetch_tool("multi_tool", &url2, "sha256", &sha256, None, &cache_dir);
+        let res2 = fetch_tool("multi_tool", &url2, "sha256", &sha256, None, &base_cache);
         assert!(res2.is_ok());
 
         let updated_content = fs::read_to_string(&url_file).unwrap();
@@ -968,8 +971,8 @@ mod tests {
         fs::remove_file(&src1).unwrap();
         fs::remove_file(&src2).unwrap();
 
-        assert!(fetch_tool("multi_tool", &url1, "sha256", &sha256, None, &cache_dir).is_ok());
-        assert!(fetch_tool("multi_tool", &url2, "sha256", &sha256, None, &cache_dir).is_ok());
+        assert!(fetch_tool("multi_tool", &url1, "sha256", &sha256, None, &base_cache).is_ok());
+        assert!(fetch_tool("multi_tool", &url2, "sha256", &sha256, None, &base_cache).is_ok());
     }
 
     #[test]
@@ -996,10 +999,10 @@ mod tests {
 
         let sha256 = format!("{:x}", Sha256::digest(&xz_bytes));
         let fake_home = temp_path.join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let base_cache = fake_home.join(".cache/scrim");
 
         let file_url = format!("file://{}", tar_xz_path.to_str().unwrap());
-        let result = fetch_tool("my_test_tool", &file_url, "sha256", &sha256, Some("bin/mytool"), &cache_dir);
+        let result = fetch_tool("my_test_tool", &file_url, "sha256", &sha256, Some("bin/mytool"), &base_cache);
 
         assert!(result.is_ok());
         let target_path = result.unwrap();
@@ -1040,10 +1043,10 @@ mod tests {
 
         let sha256 = format!("{:x}", Sha256::digest(&xz_bytes));
         let fake_home = temp_path.join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let base_cache = fake_home.join(".cache/scrim");
 
         let file_url = format!("file://{}", txz_path.to_str().unwrap());
-        let result = fetch_tool("mytool", &file_url, "sha256", &sha256, None, &cache_dir);
+        let result = fetch_tool("mytool", &file_url, "sha256", &sha256, None, &base_cache);
 
         assert!(result.is_ok());
         let target_path = result.unwrap();
@@ -1075,10 +1078,10 @@ mod tests {
 
         let sha256 = format!("{:x}", Sha256::digest(&xz_bytes));
         let fake_home = temp_path.join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let base_cache = fake_home.join(".cache/scrim");
 
         let file_url = format!("file://{}", xz_path.to_str().unwrap());
-        let result = fetch_tool("mytool", &file_url, "sha256", &sha256, Some("bin/mytool"), &cache_dir);
+        let result = fetch_tool("mytool", &file_url, "sha256", &sha256, Some("bin/mytool"), &base_cache);
 
         assert!(result.is_ok());
         let target_path = result.unwrap();
@@ -1096,10 +1099,10 @@ mod tests {
 
         let sha256 = format!("{:x}", Sha256::digest(b"not a valid xz file"));
         let fake_home = temp_path.join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let base_cache = fake_home.join(".cache/scrim");
 
         let file_url = format!("file://{}", corrupt_path.to_str().unwrap());
-        let result = fetch_tool("corrupt_tool", &file_url, "sha256", &sha256, None, &cache_dir);
+        let result = fetch_tool("corrupt_tool", &file_url, "sha256", &sha256, None, &base_cache);
 
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
@@ -1119,10 +1122,10 @@ mod tests {
 
         let sha256 = format!("{:x}", Sha256::digest(&xz_bytes));
         let fake_home = temp_path.join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let base_cache = fake_home.join(".cache/scrim");
 
         let file_url = format!("file://{}", corrupt_tar_path.to_str().unwrap());
-        let result = fetch_tool("corrupt_tool", &file_url, "sha256", &sha256, None, &cache_dir);
+        let result = fetch_tool("corrupt_tool", &file_url, "sha256", &sha256, None, &base_cache);
 
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
@@ -1153,10 +1156,10 @@ mod tests {
 
         let sha256 = format!("{:x}", Sha256::digest(&xz_bytes));
         let fake_home = temp_path.join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let base_cache = fake_home.join(".cache/scrim");
 
         let file_url = format!("file://{}", tar_xz_path.to_str().unwrap());
-        let result = fetch_tool("mytool", &file_url, "sha256", &sha256, None, &cache_dir);
+        let result = fetch_tool("mytool", &file_url, "sha256", &sha256, None, &base_cache);
 
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
@@ -1194,10 +1197,10 @@ mod tests {
 
         let sha256 = format!("{:x}", Sha256::digest(fs::read(&tar_gz_path).unwrap()));
         let fake_home = temp_path.join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let base_cache = fake_home.join(".cache/scrim");
 
         let file_url = format!("file://{}", tar_gz_path.to_str().unwrap());
-        let result = fetch_tool("conflict_tool", &file_url, "sha256", &sha256, None, &cache_dir);
+        let result = fetch_tool("conflict_tool", &file_url, "sha256", &sha256, None, &base_cache);
 
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
@@ -1227,10 +1230,11 @@ mod tests {
 
         let sha256 = format!("{:x}", Sha256::digest(fs::read(&appimage_path).unwrap()));
         let fake_home = temp_path.join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let base_cache = fake_home.join(".cache/scrim");
+        let cache_dir = tool_cache_dir(&base_cache, "sha256", &sha256);
 
         let file_url = format!("file://{}", appimage_path.to_str().unwrap());
-        let result = fetch_tool("mytool", &file_url, "sha256", &sha256, None, &cache_dir);
+        let result = fetch_tool("mytool", &file_url, "sha256", &sha256, None, &base_cache);
 
         assert!(result.is_ok(), "Failed to fetch AppImage: {:?}", result.err());
         let target_path = result.unwrap();
@@ -1264,7 +1268,8 @@ mod tests {
 
         let sha256 = format!("{:x}", Sha256::digest(fs::read(&appimage_path).unwrap()));
         let fake_home = temp_path.join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let base_cache = fake_home.join(".cache/scrim");
+        let cache_dir = tool_cache_dir(&base_cache, "sha256", &sha256);
 
         let file_url = format!("file://{}?download=1", appimage_path.to_str().unwrap());
         let result = fetch_tool(
@@ -1273,7 +1278,7 @@ mod tests {
             "sha256",
             &sha256,
             Some("usr/bin/custom_bin"),
-            &cache_dir,
+            &base_cache,
         );
 
         assert!(result.is_ok(), "Failed to fetch .appimage: {:?}", result.err());
@@ -1302,10 +1307,10 @@ mod tests {
 
         let sha256 = format!("{:x}", Sha256::digest(data));
         let fake_home = temp_path.join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let base_cache = fake_home.join(".cache/scrim");
 
         let file_url = format!("file://{}", corrupt_path.to_str().unwrap());
-        let result = fetch_tool("corrupt", &file_url, "sha256", &sha256, None, &cache_dir);
+        let result = fetch_tool("corrupt", &file_url, "sha256", &sha256, None, &base_cache);
 
         assert!(result.is_err());
         let err_msg = result.err().unwrap().to_string();
@@ -1327,10 +1332,11 @@ mod tests {
 
         let sha256 = format!("{:x}", Sha256::digest(fs::read(&appimage_path).unwrap()));
         let fake_home = temp_path.join("fake_home");
-        let cache_dir = fake_home.join(".cache/scrim/tools").join(format!("sha256:{}", sha256));
+        let base_cache = fake_home.join(".cache/scrim");
+        let cache_dir = tool_cache_dir(&base_cache, "sha256", &sha256);
 
         let file_url = format!("file://{}", appimage_path.to_str().unwrap());
-        let result = fetch_tool("mytool", &file_url, "sha256", &sha256, None, &cache_dir);
+        let result = fetch_tool("mytool", &file_url, "sha256", &sha256, None, &base_cache);
 
         assert!(result.is_ok(), "Expected relative AppRun symlink to succeed, got: {:?}", result.err());
         let target_path = result.unwrap();
