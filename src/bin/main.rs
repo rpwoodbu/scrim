@@ -98,13 +98,6 @@ fn handle_management_command(args: &[std::ffi::OsString], app_env: &AppEnvironme
             }
         }
         CliParseResult::Command(CliCommand::Links { dir, dry_run }) => {
-            let dir_arg = match dir {
-                Some(ref d) => d.as_path(),
-                None => {
-                    scrim_error!("directory argument required for links command");
-                    std::process::exit(1);
-                }
-            };
             let scrim_exe = match env::current_exe() {
                 Ok(exe) => exe,
                 Err(e) => {
@@ -113,7 +106,7 @@ fn handle_management_command(args: &[std::ffi::OsString], app_env: &AppEnvironme
                 }
             };
             let config = load_configuration(app_env);
-            match create_links(dir_arg, &scrim_exe, &config, dry_run) {
+            match create_links(&dir, &scrim_exe, &config, dry_run) {
                 Ok(modified) => {
                     if dry_run && modified {
                         std::process::exit(2);
@@ -126,31 +119,16 @@ fn handle_management_command(args: &[std::ffi::OsString], app_env: &AppEnvironme
             }
         }
         CliParseResult::Command(CliCommand::Run { tool, args }) => {
-            let tool_name = match tool {
-                Some(t) => t,
-                None => {
-                    scrim_error!("tool name argument required for run command");
-                    std::process::exit(1);
-                }
-            };
-            execute_tool(&tool_name, &args, app_env);
+            execute_tool(&tool, &args, app_env);
         }
         CliParseResult::Command(CliCommand::Which { tool }) => {
-            let tool_name = match tool {
-                Some(t) => t,
-                None => {
-                    scrim_error!("tool name argument required for which command");
-                    std::process::exit(1);
-                }
-            };
-            which_tool(&tool_name, app_env);
+            which_tool(&tool, app_env);
         }
         CliParseResult::Help(text) => {
             print!("{}", text);
         }
         CliParseResult::Error(err) => {
-            let trimmed_err = err.strip_prefix("error: ").unwrap_or(&err);
-            scrim_error!("{}", trimmed_err);
+            scrim_error!("{}", err);
             std::process::exit(1);
         }
     }

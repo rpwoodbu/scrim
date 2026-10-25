@@ -9,15 +9,15 @@ pub enum CliCommand {
         tool: Option<String>,
     },
     Links {
-        dir: Option<PathBuf>,
+        dir: PathBuf,
         dry_run: bool,
     },
     Run {
-        tool: Option<String>,
+        tool: String,
         args: Vec<OsString>,
     },
     Which {
-        tool: Option<String>,
+        tool: String,
     },
 }
 
@@ -97,12 +97,20 @@ where
                 CliParseResult::Command(CliCommand::Config { tool })
             }
             Some(("links", sub_matches)) => {
-                let dir = sub_matches.get_one::<String>("dir").map(PathBuf::from);
+                let Some(dir) = sub_matches.get_one::<String>("dir").map(PathBuf::from) else {
+                    return CliParseResult::Error(
+                        "directory argument required for links command".to_string(),
+                    );
+                };
                 let dry_run = sub_matches.get_flag("dry_run");
                 CliParseResult::Command(CliCommand::Links { dir, dry_run })
             }
             Some(("run", sub_matches)) => {
-                let tool = sub_matches.get_one::<String>("tool").cloned();
+                let Some(tool) = sub_matches.get_one::<String>("tool").cloned() else {
+                    return CliParseResult::Error(
+                        "tool name argument required for run command".to_string(),
+                    );
+                };
                 let args = sub_matches
                     .get_many::<OsString>("args")
                     .unwrap_or_default()
@@ -111,7 +119,11 @@ where
                 CliParseResult::Command(CliCommand::Run { tool, args })
             }
             Some(("which", sub_matches)) => {
-                let tool = sub_matches.get_one::<String>("tool").cloned();
+                let Some(tool) = sub_matches.get_one::<String>("tool").cloned() else {
+                    return CliParseResult::Error(
+                        "tool name argument required for which command".to_string(),
+                    );
+                };
                 CliParseResult::Command(CliCommand::Which { tool })
             }
             _ => unreachable!(),
@@ -121,7 +133,14 @@ where
                 CliParseResult::Help(err.to_string())
             }
             ErrorKind::DisplayVersion => CliParseResult::Command(CliCommand::Version),
-            _ => CliParseResult::Error(err.to_string()),
+            _ => {
+                let err_str = err.to_string();
+                let trimmed = err_str
+                    .strip_prefix("error: ")
+                    .unwrap_or(&err_str)
+                    .to_string();
+                CliParseResult::Error(trimmed)
+            }
         },
     }
 }
@@ -160,6 +179,7 @@ mod tests {
     fn test_unknown_command_errors() {
         match parse_management_cli(["scrim", "unknown"]) {
             CliParseResult::Error(err) => {
+                assert!(!err.starts_with("error: "));
                 assert!(err.contains("unrecognized subcommand 'unknown'"));
             }
             other => panic!("Expected Error, got {:?}", other),
@@ -210,6 +230,7 @@ mod tests {
         );
         match parse_management_cli(["scrim", "config", "node", "extra"]) {
             CliParseResult::Error(err) => {
+                assert!(!err.starts_with("error: "));
                 assert!(err.contains("unexpected argument 'extra'"));
             }
             other => panic!("Expected Error, got {:?}", other),
@@ -220,16 +241,17 @@ mod tests {
     fn test_which_subcommand() {
         assert_eq!(
             parse_management_cli(["scrim", "which"]),
-            CliParseResult::Command(CliCommand::Which { tool: None })
+            CliParseResult::Error("tool name argument required for which command".to_string())
         );
         assert_eq!(
             parse_management_cli(["scrim", "which", "node"]),
             CliParseResult::Command(CliCommand::Which {
-                tool: Some("node".to_string())
+                tool: "node".to_string()
             })
         );
         match parse_management_cli(["scrim", "which", "node", "extra"]) {
             CliParseResult::Error(err) => {
+                assert!(!err.starts_with("error: "));
                 assert!(err.contains("unexpected argument 'extra'"));
             }
             other => panic!("Expected Error, got {:?}", other),
@@ -241,51 +263,45 @@ mod tests {
         assert_eq!(
             parse_management_cli(["scrim", "links", "/tmp/bin"]),
             CliParseResult::Command(CliCommand::Links {
-                dir: Some(PathBuf::from("/tmp/bin")),
+                dir: PathBuf::from("/tmp/bin"),
                 dry_run: false,
             })
         );
         assert_eq!(
             parse_management_cli(["scrim", "links", "-n", "/tmp/bin"]),
             CliParseResult::Command(CliCommand::Links {
-                dir: Some(PathBuf::from("/tmp/bin")),
+                dir: PathBuf::from("/tmp/bin"),
                 dry_run: true,
             })
         );
         assert_eq!(
             parse_management_cli(["scrim", "links", "/tmp/bin", "-n"]),
             CliParseResult::Command(CliCommand::Links {
-                dir: Some(PathBuf::from("/tmp/bin")),
+                dir: PathBuf::from("/tmp/bin"),
                 dry_run: true,
             })
         );
         assert_eq!(
             parse_management_cli(["scrim", "links", "--dry-run", "/tmp/bin"]),
             CliParseResult::Command(CliCommand::Links {
-                dir: Some(PathBuf::from("/tmp/bin")),
+                dir: PathBuf::from("/tmp/bin"),
                 dry_run: true,
             })
         );
         assert_eq!(
             parse_management_cli(["scrim", "links", "/tmp/bin", "--dry-run"]),
             CliParseResult::Command(CliCommand::Links {
-                dir: Some(PathBuf::from("/tmp/bin")),
+                dir: PathBuf::from("/tmp/bin"),
                 dry_run: true,
             })
         );
         assert_eq!(
             parse_management_cli(["scrim", "links"]),
-            CliParseResult::Command(CliCommand::Links {
-                dir: None,
-                dry_run: false,
-            })
+            CliParseResult::Error("directory argument required for links command".to_string())
         );
         assert_eq!(
             parse_management_cli(["scrim", "links", "-n"]),
-            CliParseResult::Command(CliCommand::Links {
-                dir: None,
-                dry_run: true,
-            })
+            CliParseResult::Error("directory argument required for links command".to_string())
         );
     }
 
@@ -294,7 +310,7 @@ mod tests {
         assert_eq!(
             parse_management_cli(["scrim", "run", "node", "index.js", "foo"]),
             CliParseResult::Command(CliCommand::Run {
-                tool: Some("node".to_string()),
+                tool: "node".to_string(),
                 args: vec![OsString::from("index.js"), OsString::from("foo")],
             })
         );
@@ -304,10 +320,7 @@ mod tests {
     fn test_run_subcommand_no_tool() {
         assert_eq!(
             parse_management_cli(["scrim", "run"]),
-            CliParseResult::Command(CliCommand::Run {
-                tool: None,
-                args: vec![],
-            })
+            CliParseResult::Error("tool name argument required for run command".to_string())
         );
     }
 
@@ -316,7 +329,7 @@ mod tests {
         assert_eq!(
             parse_management_cli(["scrim", "run", "--", "node", "-v", "--flag"]),
             CliParseResult::Command(CliCommand::Run {
-                tool: Some("node".to_string()),
+                tool: "node".to_string(),
                 args: vec![OsString::from("-v"), OsString::from("--flag")],
             })
         );
@@ -327,7 +340,7 @@ mod tests {
         assert_eq!(
             parse_management_cli(["scrim", "run", "node", "--", "-v", "--flag"]),
             CliParseResult::Command(CliCommand::Run {
-                tool: Some("node".to_string()),
+                tool: "node".to_string(),
                 args: vec![OsString::from("-v"), OsString::from("--flag")],
             })
         );
@@ -337,32 +350,41 @@ mod tests {
     fn test_run_subcommand_with_double_dash_empty() {
         assert_eq!(
             parse_management_cli(["scrim", "run", "--"]),
-            CliParseResult::Command(CliCommand::Run {
-                tool: None,
-                args: vec![],
-            })
+            CliParseResult::Error("tool name argument required for run command".to_string())
         );
     }
 
     #[test]
     fn test_undefined_flags_fail() {
         match parse_management_cli(["scrim", "--foo"]) {
-            CliParseResult::Error(err) => assert!(err.contains("unexpected argument '--foo'")),
+            CliParseResult::Error(err) => {
+                assert!(!err.starts_with("error: "));
+                assert!(err.contains("unexpected argument '--foo'"));
+            }
             other => panic!("Expected Error, got {:?}", other),
         }
 
         match parse_management_cli(["scrim", "-x"]) {
-            CliParseResult::Error(err) => assert!(err.contains("unexpected argument '-x'")),
+            CliParseResult::Error(err) => {
+                assert!(!err.starts_with("error: "));
+                assert!(err.contains("unexpected argument '-x'"));
+            }
             other => panic!("Expected Error, got {:?}", other),
         }
 
         match parse_management_cli(["scrim", "run", "node", "--foo"]) {
-            CliParseResult::Error(err) => assert!(err.contains("unexpected argument '--foo'")),
+            CliParseResult::Error(err) => {
+                assert!(!err.starts_with("error: "));
+                assert!(err.contains("unexpected argument '--foo'"));
+            }
             other => panic!("Expected Error, got {:?}", other),
         }
 
         match parse_management_cli(["scrim", "config", "--foo"]) {
-            CliParseResult::Error(err) => assert!(err.contains("unexpected argument '--foo'")),
+            CliParseResult::Error(err) => {
+                assert!(!err.starts_with("error: "));
+                assert!(err.contains("unexpected argument '--foo'"));
+            }
             other => panic!("Expected Error, got {:?}", other),
         }
     }
@@ -400,7 +422,7 @@ mod tests {
         assert_eq!(
             parse_management_cli(["scrim", "run", "foo", "--", "-h"]),
             CliParseResult::Command(CliCommand::Run {
-                tool: Some("foo".to_string()),
+                tool: "foo".to_string(),
                 args: vec![OsString::from("-h")],
             })
         );
