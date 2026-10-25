@@ -17,10 +17,10 @@
 
 ## Installation
 
-1. Download the executable (e.g., `scrim-linux-amd64`) from the latest GitHub Release.
+1. Download the executable (e.g., `scrim-linux-x86_64` or `scrim-linux-aarch64`) from the latest GitHub Release.
 2. Install the downloaded binary to a stable directory in your `PATH` (e.g., `/usr/local/bin`):
    ```bash
-   sudo install -m 755 scrim-linux-amd64 /usr/local/bin/scrim
+   sudo install -m 755 scrim-linux-x86_64 /usr/local/bin/scrim
    ```
 3. Create `scrim.yaml` file(s) (keep reading).
 4. Populate tool links in a directory in your `PATH` (e.g., `/usr/local/bin`):

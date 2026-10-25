@@ -28,16 +28,22 @@ jobs:
       - name: Run all tests (including performance validation)
         run: bazel test //... //tests:performance_validation_test
 
-      - name: Build release binary
+      - name: Build release binaries
         run: |
-          bazel build -c opt --stamp --remote_download_toplevel //src/bin:scrim
-          cp bazel-bin/src/bin/scrim scrim-linux-amd64
-          chmod +x scrim-linux-amd64
+          bazel build -c opt --stamp --config=linux-x86_64 --remote_download_toplevel //src/bin:scrim
+          cp bazel-bin/src/bin/scrim scrim-linux-x86_64
+          chmod +x scrim-linux-x86_64
+
+          bazel build -c opt --stamp --config=linux-aarch64 --remote_download_toplevel //src/bin:scrim
+          cp bazel-bin/src/bin/scrim scrim-linux-aarch64
+          chmod +x scrim-linux-aarch64
 
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v3
         with:
-          files: scrim-linux-amd64
+          files: |
+            scrim-linux-x86_64
+            scrim-linux-aarch64
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

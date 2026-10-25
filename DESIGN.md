@@ -2,9 +2,6 @@
 
 **Scrim** is a lightweight, transparent proxy for developer tools, designed to provide context-aware tool versioning without requiring shell hooks or environment manipulation.
 
-> [!WARNING]
-> Multi-platform configuration support is a work-in-progress. While the architectural design is specified below, the implementation does not yet fully reflect this design.
-
 > [!NOTE]
 > The name **Scrim** refers to the thin, translucent fabric used in theater to create lighting effects or hide/reveal elements on stage. It reflects our goal of being a "thin" proxy that stays behind the curtain until needed.
 
@@ -276,7 +273,7 @@ Scrim avoids heavy external logging crates. Instead, it uses a lightweight, inte
 
 ## Build & Project Structure
 - Use Bazel with `rules_rust` for building the project.
-- **Static Linking via musl**: Bazel and `rules_rust` are configured to target `x86_64-unknown-linux-musl` to eliminate runtime dynamic C library dependencies and ensure universal portability across Linux distributions.
+- **Static Linking via musl**: Bazel and `rules_rust` are configured to target `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` to eliminate runtime dynamic C library dependencies and ensure universal portability across Linux distributions.
 - **Modular Build Files & Packaging**: To maintain a clean architecture, avoid monolithic build files or libraries. Logical domains are partitioned into distinct Bazel packages with their own `BUILD.bazel` files.
 - **Visibility Protection**: Packages must enforce least privilege through Bazel target visibilities. Targets should only be visible to packages that strictly require them, protecting architectural boundaries from inappropriate coupling.
 - **Binary Version Stamping**: Release binaries are stamped with the Git commit hash using Bazel workspace status stamping (`--workspace_status_command`). A workspace status script (`tools/workspace_status.sh`) provides `STABLE_GIT_COMMIT`, which `rules_rust` embeds into the binary during stamped builds (`--stamp`). In unstamped builds, the commit hash is omitted.
@@ -286,8 +283,8 @@ CI and releases are automated via GitHub Actions.
 - The pipeline triggers on pushes to the `main` branch as well as on version tags (e.g., `v*`).
 - Pushes to `main` build and test the codebase to validate commits and maintain warm Bazel caches (Bazelisk, repository, and disk cache) on the default branch scope.
 - It runs all tests, including unit, integration, and manual performance validation tests, ensuring regressions are not published.
-- It builds a statically linked Linux amd64 release binary using Bazel with workspace stamping enabled (`--stamp`).
-- The binary is published as a GitHub Release artifact alongside the source code only when triggered by a version tag.
+- It builds statically linked Linux release binaries for both `linux-x86_64` and `linux-aarch64` using Bazel with workspace stamping enabled (`--stamp`).
+- The binaries are published as GitHub Release artifacts (`scrim-linux-x86_64` and `scrim-linux-aarch64`) alongside the source code only when triggered by a version tag.
 - Build status for `main` is tracked via a workflow status badge in `README.md`.
 
 ### Directory Layout
@@ -328,6 +325,6 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
 - **Cache Management**: Commands to clean or inspect the cache directory.
 - **Home Directory Search Boundary**: Stop upward directory traversal for `scrim.yaml` at `$HOME` to prevent scanning system directories when outside of a repository.
 - **Configurable Telemetry**: Support configuring the telemetry behavior and output destination (rather than hardcoding `/tmp/scrim_telemetry.log`).
-- **Cross-Platform Releases**: Support for building and releasing binaries for other architectures and operating systems (e.g., ARM64, macOS).
+- **macOS Releases**: Support for building and releasing binaries for macOS (e.g., Apple Silicon / Intel).
 
 [xdg-basedir]: https://specifications.freedesktop.org/basedir/0.8/ "XDG Base Directory Specification (version 0.8)"

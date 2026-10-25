@@ -8,13 +8,17 @@ bazel_dep(name = "platforms", version = "1.1.0")
 rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
 rust.toolchain(
     edition = "2021",
-    extra_target_triples = ["x86_64-unknown-linux-musl"],
+    extra_target_triples = [
+        "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-musl",
+    ],
     versions = ["1.98.1"],
 )
 use_repo(rust, "rust_toolchains")
 
 register_toolchains(
-    "//:musl_rust_toolchain",
+    "//:musl_rust_toolchain_x86_64",
+    "//:musl_rust_toolchain_aarch64",
     "@rust_toolchains//:all",
 )
 
