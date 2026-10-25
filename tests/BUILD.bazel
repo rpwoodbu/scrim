@@ -24,7 +24,10 @@ rust_test(
     srcs = ["perf_test.rs"],
     edition = "2021",
     data = ["//benches:scrim_bench"],
-    tags = ["manual"],
+    tags = [
+        "exclusive",
+        "manual",
+    ],
     deps = [
         ":test_helpers",
         "@crates//:tempfile",

@@ -231,7 +231,7 @@ CI and releases are automated via GitHub Actions.
 The project enforces the following prescriptive layout:
 - `/src/`: Contains the executable binary target package (`/src/bin/`) and modular library subpackages corresponding to distinct architectural concerns (e.g., CLI parsing, configuration, fetching, linking, logging, resolution, telemetry, versioning).
 - `/tests/`: Contains standard unit and integration tests as well as validation tests for benchmarks thresholds.
-    - Benchmark threshold tests must be marked as `manual` as they are not correctness tests and are subject to flakiness.
+    - Benchmark threshold tests must be marked as `manual` and `exclusive` as they are not correctness tests and require dedicated machine resources to minimize timing noise and flakiness.
 - `/benches/`: Contains the statistical microbenchmark harness code.
 - `/tools/`: Contains build and workspace automation scripts (e.g., workspace status script for binary stamping).
 
@@ -256,7 +256,7 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
     - Missing configurations (falling back to global defaults).
     - Failed fetches and fallback behavior.
 - **Telemetry Validation**: Tests to ensure that telemetry failure never impacts the main execution flow.
-- **Performance Threshold Validation**: There must be a separate "manual" test target which will run the benchmarks such that they generate proper data and will automatically fail if the required performance thresholds (e.g., < 2ms overhead) are not met.
+- **Performance Threshold Validation**: There must be a separate "manual" test target (tagged `manual` and `exclusive` to ensure isolated execution without noise from concurrent actions) which will run the benchmarks such that they generate proper data and will automatically fail if the required performance thresholds (e.g., < 2ms overhead) are not met.
 
 ### Bug Regression Testing
 - **Regression Prevention**: If a bug is discovered, a dedicated regression test must be written that clearly reproduces and elucidates the bug, ensuring it never returns.
