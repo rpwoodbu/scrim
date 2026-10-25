@@ -73,27 +73,11 @@ fn handle_management_command(args: &[std::ffi::OsString], app_env: &AppEnvironme
         }
         CliParseResult::Command(CliCommand::Config { tool }) => {
             let config = load_configuration(app_env);
-            if let Some(tool_name) = tool {
-                match config.tools.get(&tool_name) {
-                    Some(tool_config) => match serde_yaml::to_string(tool_config) {
-                        Ok(yaml) => print!("{}", yaml),
-                        Err(e) => {
-                            scrim_error!("Failed to serialize configuration: {}", e);
-                            std::process::exit(1);
-                        }
-                    },
-                    None => {
-                        scrim_error!("Tool '{}' not found in config", tool_name);
-                        std::process::exit(1);
-                    }
-                }
-            } else {
-                match serde_yaml::to_string(&config) {
-                    Ok(yaml) => print!("{}", yaml),
-                    Err(e) => {
-                        scrim_error!("Failed to serialize configuration: {}", e);
-                        std::process::exit(1);
-                    }
+            match config.format_yaml(tool.as_deref()) {
+                Ok(yaml) => print!("{}", yaml),
+                Err(e) => {
+                    scrim_error!("{}", e);
+                    std::process::exit(1);
                 }
             }
         }

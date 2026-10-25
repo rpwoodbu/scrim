@@ -91,6 +91,19 @@ impl Config {
         self.tools.extend(other.tools);
         self
     }
+
+    pub fn format_yaml(&self, tool: Option<&str>) -> Result<String, String> {
+        if let Some(tool_name) = tool {
+            match self.tools.get(tool_name) {
+                Some(tool_config) => serde_yaml::to_string(tool_config)
+                    .map_err(|e| format!("Failed to serialize configuration: {}", e)),
+                None => Err(format!("Tool '{}' not found in config", tool_name)),
+            }
+        } else {
+            serde_yaml::to_string(self)
+                .map_err(|e| format!("Failed to serialize configuration: {}", e))
+        }
+    }
 }
 
 pub fn load_config(
@@ -233,39 +246,33 @@ fn read_config_internal(
     Ok(result)
 }
 
-pub fn resolve_config_dir(xdg_config_env: Option<&Path>, home_dir: Option<&Path>) -> PathBuf {
-    if let Some(xdg_path) = xdg_config_env {
+fn resolve_xdg_base_dir(
+    xdg_env: Option<&Path>,
+    home_dir: Option<&Path>,
+    default_subdir: &str,
+) -> PathBuf {
+    if let Some(xdg_path) = xdg_env {
         if xdg_path.is_absolute() {
             return xdg_path.to_path_buf();
         }
     }
 
     if let Some(home) = home_dir {
-        home.join(".config")
+        home.join(default_subdir)
     } else {
-        PathBuf::from(".config")
+        PathBuf::from(default_subdir)
     }
+}
+
+pub fn resolve_config_dir(xdg_config_env: Option<&Path>, home_dir: Option<&Path>) -> PathBuf {
+    resolve_xdg_base_dir(xdg_config_env, home_dir, ".config")
 }
 
 pub fn resolve_cache_dir(
     xdg_cache_env: Option<&Path>,
     home_dir: Option<&Path>,
 ) -> PathBuf {
-    let base_cache = if let Some(xdg_path) = xdg_cache_env {
-        if xdg_path.is_absolute() {
-            xdg_path.to_path_buf()
-        } else if let Some(home) = home_dir {
-            home.join(".cache")
-        } else {
-            PathBuf::from(".cache")
-        }
-    } else if let Some(home) = home_dir {
-        home.join(".cache")
-    } else {
-        PathBuf::from(".cache")
-    };
-
-    base_cache.join("scrim")
+    resolve_xdg_base_dir(xdg_cache_env, home_dir, ".cache").join("scrim")
 }
 
 #[cfg(test)]
@@ -801,5 +808,44 @@ tools:
             config.tools.get("tool_c").unwrap().system_path.as_deref(),
             Some("/bin/tool_c")
         );
+    }
+
+    #[test]
+    fn test_format_yaml() {
+        let mut tools = BTreeMap::new();
+        tools.insert(
+            "node".to_string(),
+            ToolConfig {
+                system_path: Some("/usr/local/bin/node".to_string()),
+                ..Default::default()
+            },
+        );
+        tools.insert(
+            "go".to_string(),
+            ToolConfig {
+                url: Some("https://go.dev/dl/go1.21.5.linux-amd64.tar.gz".to_string()),
+                sha256: Some("285c1f0624022839446d32".to_string()),
+                ..Default::default()
+            },
+        );
+        let config = Config {
+            telemetry: Some(true),
+            imports: Vec::new(),
+            tools,
+        };
+
+        // Full configuration
+        let full_yaml = config.format_yaml(None).unwrap();
+        assert!(full_yaml.contains("telemetry: true"));
+        assert!(full_yaml.contains("node:"));
+        assert!(full_yaml.contains("go:"));
+
+        // Specific tool configuration
+        let node_yaml = config.format_yaml(Some("node")).unwrap();
+        assert_eq!(node_yaml.trim(), "system_path: /usr/local/bin/node");
+
+        // Unknown tool error
+        let err = config.format_yaml(Some("nonexistent")).unwrap_err();
+        assert_eq!(err, "Tool 'nonexistent' not found in config");
     }
 }

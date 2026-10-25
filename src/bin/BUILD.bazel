@@ -23,6 +23,5 @@ rust_binary(
         "//src/telemetry",
         "//src/version",
         "@crates//:libc",
-        "@crates//:serde_yaml",
     ],
 )
