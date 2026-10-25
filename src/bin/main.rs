@@ -148,18 +148,9 @@ fn execute_tool(program_name: &str, tool_args: &[std::ffi::OsString], app_env: &
                 cmd.args(tool_args);
             }
 
-            // Fork for telemetry (non-blocking) if enabled in config
-            let enable_telemetry = config.telemetry_enabled();
-            if enable_telemetry {
-                unsafe {
-                    let pid = libc::fork();
-                    if pid == 0 {
-                        // Child process: handle telemetry and exit
-                        report_usage(program_name, &target_path);
-                        libc::_exit(0);
-                    }
-                    // Parent process continues to exec
-                }
+            // Report usage in the background (non-blocking) if enabled in config
+            if config.telemetry_enabled() {
+                report_usage(program_name, &target_path);
             }
 
             // Replace the current process with the target tool

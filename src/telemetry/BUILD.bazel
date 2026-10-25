@@ -1,4 +1,4 @@
-load("@rules_rust//rust:defs.bzl", "rust_library")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 rust_library(
     name = "telemetry",
@@ -8,5 +8,14 @@ rust_library(
     visibility = ["//src/bin:__pkg__"],
     deps = [
         "@crates//:chrono",
+        "@crates//:libc",
+    ],
+)
+
+rust_test(
+    name = "telemetry_test",
+    crate = ":telemetry",
+    deps = [
+        "@crates//:tempfile",
     ],
 )
