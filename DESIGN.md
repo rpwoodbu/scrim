@@ -2,6 +2,9 @@
 
 **Scrim** is a lightweight, transparent proxy for developer tools, designed to provide context-aware tool versioning without requiring shell hooks or environment manipulation.
 
+> [!WARNING]
+> Multi-platform configuration support is a work-in-progress. While the architectural design is specified below, the implementation does not yet fully reflect this design.
+
 > [!NOTE]
 > The name **Scrim** refers to the thin, translucent fabric used in theater to create lighting effects or hide/reveal elements on stage. It reflects our goal of being a "thin" proxy that stays behind the curtain until needed.
 
@@ -37,37 +40,43 @@ When invoked directly as `scrim` (i.e., `argv[0]` is `scrim`), Scrim provides a 
 - `run`: Runs a defined tool directly without requiring a link.
 - `which`: Locates and prints the absolute path of the binary that would be executed for a tool without running it.
 
-#### Config Command (`scrim config [TOOL]`)
+#### Config Command (`scrim config [OPTIONS] [TOOL]`)
 
-The `scrim config` command reports the resultant aggregated configuration after resolving all configuration layers, or reports the configuration of a specific tool if `<TOOL>` is provided. Unspecified fields and empty collections are omitted from the output to reduce noise.
+The `scrim config` command reports the effective configuration for a target platform after resolving all configuration layers, or reports a specific tool's effective configuration if `<TOOL>` is provided. Unspecified fields and empty collections are omitted from the output to reduce noise.
 
+- **Options**:
+  - `--platform <PLATFORM>`: Target platform to evaluate. Defaults to the current host platform.
 - **Arguments**: Optional `<TOOL>` (name of the tool whose configuration to report).
 - **Behavior**:
   1. Resolves aggregated configuration across system, user, and workspace layers.
-  2. If `<TOOL>` is omitted, serializes and prints the entire aggregated configuration in YAML format, with tools sorted in ascending lexicographical order by tool name.
-  3. If `<TOOL>` is provided, looks up `<TOOL>` in the aggregated configuration. If found, serializes and prints only that tool's configuration in YAML format (omitting unspecified fields).
+  2. Resolves effective tool definitions for the target platform. Tools not configured for the target platform are omitted when listing all tools.
+  3. If `<TOOL>` is omitted, serializes and prints the effective aggregated configuration in YAML format, with tools sorted in ascending lexicographical order by tool name.
+  4. If `<TOOL>` is provided:
+     - If `<TOOL>` is not found in the aggregated configuration or is not configured for the target platform, exits with an error.
+     - Otherwise, serializes and prints that tool's effective configuration for the target platform in YAML format (omitting unspecified fields).
 - **Error Handling**:
-  - Exits with non-zero status and an attributed error message if `<TOOL>` is provided but not found in the aggregated configuration (`[Scrim] Error: Tool '<TOOL>' not found in config`), or if invalid flags or additional arguments are provided.
+  - Exits with non-zero status and an attributed error message if `<TOOL>` is not found or not configured for the target platform, if an invalid platform is specified, or if invalid flags or additional arguments are provided.
 
 #### Links Command (`scrim links [OPTIONS] <DIR>`)
 
-The `scrim links` command creates or updates links in the specified directory `<DIR>` to point to the current `scrim` executable for all tools declared across resolved configuration layers.
+The `scrim links` command creates or updates links in the specified directory `<DIR>` to point to the current `scrim` executable for all tools declared across resolved configuration layers that are configured for the current host platform.
 
 - **Options**:
   - `-n, --dry-run`: Performs a dry run without creating or removing any symlinks. Reports the actions that would be performed and exits with a status code indicating whether any modifications are needed. The exit code behavior is documented in the command's help message.
 - **Arguments**: `<DIR>` (path to directory where links should be created/updated).
 - **Behavior**:
-  1. Resolves aggregated configuration across system, user, and workspace layers to get the set of defined tool names.
-  2. Resolves the executable path of the current `scrim` binary.
-  3. In dry-run mode, logs that Scrim is updating links in dry-run mode (`[Scrim] Updating links in dry-run mode`).
-  4. For each tool in the aggregated configuration:
+  1. Resolves aggregated configuration across system, user, and workspace layers.
+  2. Filters tools to only those configured for the current host platform. Tools without a configuration matching the current host platform are excluded from link generation.
+  3. Resolves the executable path of the current `scrim` binary.
+  4. In dry-run mode, logs that Scrim is updating links in dry-run mode (`[Scrim] Updating links in dry-run mode`).
+  5. For each tool configured for the current host platform:
      - If `<DIR>/<tool_name>` already exists as a symbolic link pointing to the relative path of the `scrim` binary, it is skipped.
      - If an existing file or symlink pointing elsewhere is present, reports an error, skips it, and continues.
      - Otherwise, in normal mode, creates a symbolic link at `<DIR>/<tool_name>` pointing to the relative path of the `scrim` binary and logs progress (`[Scrim] Linked <tool_name> -> <rel_path>`). In dry-run mode, logs what link would be created (`[Scrim] Would link <tool_name> -> <rel_path>`) without modifying the filesystem.
-  5. Scans `<DIR>` for any existing symbolic links pointing to the `scrim` binary whose command names are not in the aggregated tool configuration:
+  6. Scans `<DIR>` for any existing symbolic links pointing to the `scrim` binary whose command names are not among the tools configured for the current host platform:
      - In normal mode, removes the obsolete symlink and logs progress (`[Scrim] Removed obsolete link <file_name>`).
      - In dry-run mode, logs what link would be removed (`[Scrim] Would remove obsolete link <file_name>`) without modifying the filesystem.
-  6. If all links are already correct and no changes would be made, logs that fact (`[Scrim] All links are correct`).
+  7. If all links are already correct and no changes would be made, logs that fact (`[Scrim] All links are correct`).
 - **Exit Status**:
   - In normal mode: exits with status `0` on success.
   - In dry-run mode:
@@ -81,15 +90,17 @@ The `scrim run` command executes any tool defined in the aggregated configuratio
 
 - **Arguments**: `<TOOL>` (name of the tool to run), followed by any optional arguments `[args...]` to pass through to the executed tool.
 - **Behavior**: Behaves identically to executing `<TOOL>` via a link. Following the convention of tools like `sudo`, `--` is used to delimit the end of `scrim` options; subsequent options and arguments are passed to the command.
-- **Error Handling**: Exits with non-zero status and an error message if `<TOOL>` is omitted, if invalid flags are passed to `scrim`, or if tool resolution/execution fails.
+- **Error Handling**: Exits with non-zero status and an attributed error message if `<TOOL>` is omitted, if `<TOOL>` is not configured for the host platform, if invalid flags are passed to `scrim`, or if tool resolution/execution fails.
 
-#### Which Command (`scrim which <TOOL>`)
+#### Which Command (`scrim which [OPTIONS] <TOOL>`)
 
-The `scrim which` command outputs the precise absolute path of the binary that would be executed for a given tool according to the [Resolution Logic](#resolution-logic), but does not execute the binary or trigger downloads.
+The `scrim which` command outputs the precise absolute path of the binary that would be executed for a given tool according to the [Resolution Logic](#resolution-logic) for a target platform, but does not execute the binary or trigger downloads.
 
+- **Options**:
+  - `--platform <PLATFORM>`: Target platform to evaluate. Defaults to the current host platform.
 - **Arguments**: `<TOOL>` (name of the tool to look up).
-- **Behavior**: Resolves `<TOOL>` using Scrim's resolution rules and prints the target executable's absolute path to standard output without executing it or fetching missing tools.
-- **Error Handling**: Exits with non-zero status (`1`) and an attributed error message if `<TOOL>` is omitted (`[Scrim] Error: tool name argument required for which command`), if `<TOOL>` is not found in the aggregated configuration (`[Scrim] Error: Tool '<TOOL>' not found in config`), or if configuration/resolution validation fails.
+- **Behavior**: Resolves `<TOOL>` for the target platform using Scrim's resolution rules and prints the target executable's absolute path to standard output without executing it or fetching missing tools.
+- **Error Handling**: Exits with non-zero status (`1`) and an attributed error message if `<TOOL>` is omitted, if `<TOOL>` is not found in the aggregated configuration, if `<TOOL>` is not configured for the target platform, or if configuration/resolution validation fails.
 
 
 
@@ -98,20 +109,44 @@ The `scrim which` command outputs the precise absolute path of the binary that w
 Example `scrim.yaml`:
 ```yaml
 telemetry: true # disabled (false) by default
+default_platform: linux-x86_64 # optional file-level default platform syntactic sugar
 imports:
   - base-tools.yaml
   - path: ../overrides/tools.yaml
     optional: true
     precedence: after
 tools:
+  # Uses default_platform syntactic sugar:
   node:
     system_path: /bin/node
-  go:
-    # Uses system_path if it exists on disk; falls back to fetching via url if absent
-    system_path: /usr/local/go/bin/go
-    url: https://go.dev/dl/go1.21.5.linux-amd64.tar.gz
+    url: https://nodejs.org/dist/v20.10.0/node-v20.10.0-linux-x64.tar.gz
     sha256: 285c1f0624022839446d32
-    archive_path: go/bin/go
+    archive_path: node-v20.10.0-linux-x64/bin/node
+
+  # Explicit multi-platform matrix:
+  go:
+    archive_path: go/bin/go # default archive_path across platforms
+    platforms:
+      linux-x86_64:
+        system_path: /usr/local/go/bin/go
+        url: https://go.dev/dl/go1.21.5.linux-amd64.tar.gz
+        sha256: 285c1f0624022839446d32
+      linux-aarch64:
+        system_path: /usr/local/go/bin/go
+        url: https://go.dev/dl/go1.21.5.linux-arm64.tar.gz
+        sha256: 9e06e39958dc1800cfc244
+      macos-aarch64:
+        system_path: /opt/homebrew/bin/go
+        url: https://go.dev/dl/go1.21.5.darwin-arm64.tar.gz
+        sha256: 7d6c5c8f285c1f06240228
+
+  # Script or universal tool:
+  local-helper:
+    platforms:
+      any:
+        system_path: /usr/local/bin/local-helper
+
+  # Templated tool:
   gofmt:
     template: go
     archive_path: go/bin/gofmt
@@ -165,18 +200,44 @@ When a command (e.g., `node`) is invoked, Scrim follows this resolution logic:
             2. The current configuration file's own definitions.
             3. All `precedence: after` imports (in declared sequence).
         - **Transitive Imports & Cycle Detection**: Imported files may themselves contain `imports`. Scrim tracks the canonical paths of configuration files currently in the active import stack; if a circular import is detected, Scrim MUST abort with an actionable error indicating the cycle.
+    - **Platforms and Architectures**:
+      - **Target Platform Strings**: Platform identifiers use the hyphen-delimited format `<os>-<arch>` (e.g. `linux-x86_64`, `linux-aarch64`, `macos-aarch64`, `macos-x86_64`).
+      - **Canonical Names**:
+        - Supported OS names follow Bazel conventions: `linux`, `macos`.
+        - Supported CPU architectures follow Bazel conventions: `x86_64`, `aarch64`.
+      - **Synonyms & Actionable Errors**: Common synonyms (e.g., `arm64`, `amd64`, `x86-64`, `x64`, `darwin`, `osx`, or underscore-delimited combinations like `linux_x86_64`) are strictly disallowed. When encountered, Scrim produces an actionable error message explaining the invalid token, suggesting the canonical replacement, and listing the valid options.
+      - **Wildcard Stand-in (`any`)**:
+        - The `any` token can stand in for OS, CPU architecture, or both:
+          - `${os}-any`: Matches any CPU architecture on that OS (e.g., `linux-any`).
+          - `any-${arch}`: Matches that CPU architecture on any OS (e.g., `any-x86_64`).
+          - `any`: Universal match (any OS, any CPU).
+      - **Platform Matching Precedence**: For a host with OS $H_{os}$ and architecture $H_{arch}$, Scrim evaluates tool platform entries in strict priority order:
+        1. Exact match: `${H_{os}}-${H_{arch}}` (e.g. `linux-x86_64`)
+        2. OS wildcard match: `${H_{os}}-any` (e.g. `linux-any`)
+        3. Arch wildcard match: `any-${H_{arch}}` (e.g. `any-x86_64`)
+        4. Universal match: `any` (or `any-any`)
+        If no matching platform block is present, the tool is considered unconfigured for that platform.
+      - **Default Platform Syntactic Sugar**:
+        - A configuration file may define a top-level `default_platform: <os>-<arch>`.
+        - `default_platform` is strictly file-scoped: it applies only to tools declared directly within that configuration file and does NOT propagate across `imports` or configuration layers.
+        - When `default_platform` is present in a file, any tool in that file that specifies platform-specific properties (`system_path`, `url`, `sha256`, `sha512`) directly at the tool level is automatically transformed to define those properties under `platforms: { <default_platform>: ... }`.
+        - **No-Mixing Rule**: A tool must define its platform properties EITHER directly via `default_platform` OR inside a `platforms` block. Mixing platform properties directly at the tool level alongside an explicit `platforms` block within the same tool is strictly forbidden and rejected with a configuration validation error.
+      - **Archive Path Scoping**:
+        - `archive_path` may be specified at the tool level (serving as the default across all platforms for that tool) and/or within a specific platform block (overriding the tool-level default for that platform).
+        - For templated tools, `archive_path` may also be defined at either the tool level or within a platform block, overriding the inherited archive path from the template.
     - **Supported Digests**: Scrim supports cryptographic checksums using `sha256` or `sha512`.
-    - **Tool Templates**: A tool can specify a `template: <tool_name>` property to inherit the `url` and configured digest of another tool configuration, minimizing repetition and preventing mismatches within toolchains. Template chains are not allowed; a templated entry must directly reference a concrete tool configuration.
+    - **Tool Templates**: A tool can specify a `template: <tool_name>` property to inherit the fetch configuration (`url` and configured digest) and `archive_path` of another tool configuration, minimizing repetition and preventing mismatches within toolchains. Template chains are not allowed; a templated entry must directly reference a concrete tool configuration. Template resolution evaluates the referenced tool for the target platform using standard tool resolution rules.
     
     - **Configuration Validation**: To enforce the actionable UX principles, Scrim will explicitly reject invalid configurations with clear error messages rather than silently ignoring properties. Specifically:
         1. YAML parsing must be strict: unknown or misspelled fields must be rejected with an error rather than silently ignored.
         2. `system_path` may be specified alongside fetch-related properties (`url` or `template`, along with `archive_path`). In this mode, `system_path` is preferred if the target executable exists on the system at execution time; if the file at `system_path` does not exist, Scrim falls back to fetching the tool. However, `system_path` cannot be combined with partial fetch definitions (all required fetch properties must still be validly specified).
         3. `template` is mutually exclusive with `url` and digests.
         4. Exactly one digest must be specified when fetching (digest algorithms are mutually exclusive).
-        5. If a tool specifies `url` or a digest, both `url` and a digest must be present (neither can be provided without the other).
+        5. If a platform definition specifies `url` or a digest, both `url` and a digest must be present (neither can be provided without the other).
         6. `archive_path` cannot be provided if the tool doesn't resolve to a fetchable archive (i.e., no `url` or `template` is provided). If `archive_path` is omitted, Scrim defaults to `<tool_name>` at the root of the extracted directory for standard archives (`.tar.gz`, `.zip`, `.tar.xz`, etc.), and to `AppRun` at the root of the extracted directory for AppImage packages (`.AppImage`, `.appimage`).
         7. `system_path` MUST be an absolute path. Relative paths in `system_path` are rejected with an actionable error.
-        8. Empty tool configurations are invalid. Every tool must specify a `system_path`, a `url` (with a digest), or a `template`.
+        8. Empty tool configurations are invalid. Every tool must specify a `system_path`, a `url` (with a digest), or a `template` (either via `default_platform` or under `platforms`). If neither `default_platform` nor `platforms` is provided when platform-specific fields are defined, configuration validation fails with an actionable error.
+        9. Mixing tool-level platform properties with a `platforms` map within the same tool is forbidden.
 
 3.  **Execution**:
     - If the tool specifies both a `system_path` and fetch configuration (or template):
@@ -268,6 +329,5 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
 - **Home Directory Search Boundary**: Stop upward directory traversal for `scrim.yaml` at `$HOME` to prevent scanning system directories when outside of a repository.
 - **Configurable Telemetry**: Support configuring the telemetry behavior and output destination (rather than hardcoding `/tmp/scrim_telemetry.log`).
 - **Cross-Platform Releases**: Support for building and releasing binaries for other architectures and operating systems (e.g., ARM64, macOS).
-- **Per-Platform Configuration**: Configuration needs to allow per-platform specification.
 
 [xdg-basedir]: https://specifications.freedesktop.org/basedir/0.8/ "XDG Base Directory Specification (version 0.8)"
