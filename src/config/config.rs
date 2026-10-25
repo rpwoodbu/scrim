@@ -110,6 +110,100 @@ impl ToolConfig {
         None
     }
 
+    pub fn effective_for_platform(
+        &self,
+        tool_name: &str,
+        config: &Config,
+        platform: &Platform,
+    ) -> Result<Option<ToolConfig>, String> {
+        // If this tool specifies a template, validate the template reference
+        if let Some(template_name) = &self.template {
+            if let Some(template_config) = config.tools.get(template_name) {
+                if template_config.template.is_some() {
+                    return Err(format!(
+                        "Tool '{}' references template '{}', which is also a template. Template chaining is not allowed.",
+                        tool_name, template_name
+                    ));
+                }
+                // Check if the template tool has platforms and none match
+                if !template_config.platforms.is_empty() && template_config.get_platform(platform).is_none() {
+                    return Ok(None);
+                }
+            } else {
+                return Err(format!(
+                    "Tool '{}' references template '{}', which was not found.",
+                    tool_name, template_name
+                ));
+            }
+        }
+
+        if !self.platforms.is_empty() {
+            let mut matched = None;
+            for candidate in platform.matching_candidates() {
+                if let Some(plat_cfg) = self.platforms.get(&candidate) {
+                    matched = Some((candidate, plat_cfg.clone()));
+                    break;
+                }
+                if candidate == "any" {
+                    if let Some(plat_cfg) = self.platforms.get("any-any") {
+                        matched = Some(("any-any".to_string(), plat_cfg.clone()));
+                        break;
+                    }
+                }
+            }
+
+            match matched {
+                Some((plat_key, plat_cfg)) => {
+                    let mut platforms = BTreeMap::new();
+                    platforms.insert(plat_key, plat_cfg);
+                    Ok(Some(ToolConfig {
+                        template: self.template.clone(),
+                        archive_path: self.archive_path.clone(),
+                        platforms,
+                        system_path: None,
+                        url: None,
+                        sha256: None,
+                        sha512: None,
+                    }))
+                }
+                None => Ok(None),
+            }
+        } else if self.template.is_some() {
+            Ok(Some(ToolConfig {
+                template: self.template.clone(),
+                archive_path: self.archive_path.clone(),
+                platforms: BTreeMap::new(),
+                system_path: None,
+                url: None,
+                sha256: None,
+                sha512: None,
+            }))
+        } else if self.has_direct_platform_fields() {
+            let mut platforms = BTreeMap::new();
+            platforms.insert(
+                "any".to_string(),
+                PlatformToolConfig {
+                    system_path: self.system_path.clone(),
+                    url: self.url.clone(),
+                    sha256: self.sha256.clone(),
+                    sha512: self.sha512.clone(),
+                    archive_path: None,
+                },
+            );
+            Ok(Some(ToolConfig {
+                template: None,
+                archive_path: self.archive_path.clone(),
+                platforms,
+                system_path: None,
+                url: None,
+                sha256: None,
+                sha512: None,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub fn validate(&self, tool_name: &str) -> Result<(), String> {
         // 1. Empty tool configuration
         if self.template.is_none() && self.platforms.is_empty() {
@@ -237,17 +331,51 @@ impl Config {
         self
     }
 
-    pub fn format_yaml(&self, tool: Option<&str>) -> Result<String, String> {
+    pub fn effective_for_platform(&self, platform: &Platform) -> Result<Config, String> {
+        let mut effective_tools = BTreeMap::new();
+        for (tool_name, tool_config) in &self.tools {
+            if let Some(eff_tool) = tool_config.effective_for_platform(tool_name, self, platform)? {
+                effective_tools.insert(tool_name.clone(), eff_tool);
+            }
+        }
+        Ok(Config {
+            default_platform: None,
+            telemetry: self.telemetry,
+            imports: Vec::new(),
+            tools: effective_tools,
+        })
+    }
+
+    pub fn format_yaml_for_platform(
+        &self,
+        tool: Option<&str>,
+        platform: &Platform,
+    ) -> Result<String, String> {
         if let Some(tool_name) = tool {
             match self.tools.get(tool_name) {
-                Some(tool_config) => serde_yaml::to_string(tool_config)
-                    .map_err(|e| format!("Failed to serialize configuration: {}", e)),
+                Some(tool_config) => {
+                    let effective = tool_config.effective_for_platform(tool_name, self, platform)?;
+                    match effective {
+                        Some(eff) => serde_yaml::to_string(&eff)
+                            .map_err(|e| format!("Failed to serialize configuration: {}", e)),
+                        None => Err(format!(
+                            "Tool '{}' is not configured for platform '{}'",
+                            tool_name, platform
+                        )),
+                    }
+                }
                 None => Err(format!("Tool '{}' not found in config", tool_name)),
             }
         } else {
-            serde_yaml::to_string(self)
+            let effective_config = self.effective_for_platform(platform)?;
+            serde_yaml::to_string(&effective_config)
                 .map_err(|e| format!("Failed to serialize configuration: {}", e))
         }
+    }
+
+    pub fn format_yaml(&self, tool: Option<&str>) -> Result<String, String> {
+        let host = Platform::host()?;
+        self.format_yaml_for_platform(tool, &host)
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -1633,5 +1761,90 @@ tools:
         // Unknown tool error
         let err = config.format_yaml(Some("nonexistent")).unwrap_err();
         assert_eq!(err, "Tool 'nonexistent' not found in config");
+    }
+
+    #[test]
+    fn test_format_yaml_for_platform() {
+        let yaml = r#"
+telemetry: false
+tools:
+  node:
+    platforms:
+      linux-x86_64:
+        system_path: /bin/linux_node
+      macos-aarch64:
+        system_path: /opt/homebrew/bin/node
+  macos_only:
+    platforms:
+      macos-aarch64:
+        system_path: /opt/homebrew/bin/mac_tool
+  go:
+    archive_path: go/bin/go
+    platforms:
+      linux-x86_64:
+        url: https://go.dev/dl/go.linux.tar.gz
+        sha256: linux_hash
+      macos-aarch64:
+        url: https://go.dev/dl/go.mac.tar.gz
+        sha256: mac_hash
+  gofmt:
+    template: go
+    archive_path: go/bin/gofmt
+"#;
+        let config = Config::parse_str(yaml).unwrap();
+        let linux_platform = Platform::parse("linux-x86_64").unwrap();
+        let macos_platform = Platform::parse("macos-aarch64").unwrap();
+        let arm_linux = Platform::parse("linux-aarch64").unwrap();
+
+        // 1. Linux platform full config:
+        // - node has only linux-x86_64
+        // - go has only linux-x86_64
+        // - gofmt is present
+        // - macos_only is omitted
+        let linux_yaml = config.format_yaml_for_platform(None, &linux_platform).unwrap();
+        assert!(linux_yaml.contains("telemetry: false"));
+        assert!(linux_yaml.contains("node:"));
+        assert!(linux_yaml.contains("/bin/linux_node"));
+        assert!(!linux_yaml.contains("/opt/homebrew/bin/node"));
+        assert!(!linux_yaml.contains("macos_only:"));
+        assert!(linux_yaml.contains("go:"));
+        assert!(linux_yaml.contains("linux_hash"));
+        assert!(!linux_yaml.contains("mac_hash"));
+        assert!(linux_yaml.contains("gofmt:"));
+
+        // Lexicographical ordering check: go < gofmt < node
+        let go_pos = linux_yaml.find("go:").unwrap();
+        let gofmt_pos = linux_yaml.find("gofmt:").unwrap();
+        let node_pos = linux_yaml.find("node:").unwrap();
+        assert!(go_pos < gofmt_pos);
+        assert!(gofmt_pos < node_pos);
+
+        // 2. Specific tool format for linux:
+        let go_yaml = config.format_yaml_for_platform(Some("go"), &linux_platform).unwrap();
+        assert!(go_yaml.contains("linux-x86_64:"));
+        assert!(go_yaml.contains("linux_hash"));
+        assert!(!go_yaml.contains("macos-aarch64:"));
+
+        // 3. Tool not configured for platform error
+        let err = config.format_yaml_for_platform(Some("macos_only"), &linux_platform).unwrap_err();
+        assert_eq!(err, "Tool 'macos_only' is not configured for platform 'linux-x86_64'");
+
+        // 4. Unknown tool error
+        let err2 = config.format_yaml_for_platform(Some("unknown"), &linux_platform).unwrap_err();
+        assert_eq!(err2, "Tool 'unknown' not found in config");
+
+        // 5. Unconfigured platform (linux-aarch64) has empty tools list
+        let empty_yaml = config.format_yaml_for_platform(None, &arm_linux).unwrap();
+        assert!(!empty_yaml.contains("node:"));
+        assert!(!empty_yaml.contains("go:"));
+        assert!(!empty_yaml.contains("gofmt:"));
+        assert!(!empty_yaml.contains("macos_only:"));
+
+        // 6. macOS platform full config
+        let mac_yaml = config.format_yaml_for_platform(None, &macos_platform).unwrap();
+        assert!(mac_yaml.contains("macos_only:"));
+        assert!(mac_yaml.contains("/opt/homebrew/bin/mac_tool"));
+        assert!(mac_yaml.contains("mac_hash"));
+        assert!(!mac_yaml.contains("linux_hash"));
     }
 }

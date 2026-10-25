@@ -2529,6 +2529,254 @@ tools:
     assert!(stderr.contains("[Scrim] Error: unexpected argument 'extra'"));
 }
 
+#[test]
+fn test_platform_cli_config_and_which() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    fs::write(
+        &scrim_yaml,
+        r#"
+telemetry: false
+tools:
+  node:
+    platforms:
+      linux-x86_64:
+        system_path: /bin/linux_node
+      macos-aarch64:
+        system_path: /opt/homebrew/bin/mac_node
+  only_mac:
+    platforms:
+      macos-aarch64:
+        system_path: /opt/homebrew/bin/only_mac
+  only_linux:
+    platforms:
+      linux-x86_64:
+        system_path: /bin/only_linux
+  universal:
+    platforms:
+      any:
+        system_path: /bin/universal
+"#,
+    )
+    .unwrap();
+
+    // 1. scrim config --platform macos-aarch64
+    let out = Command::new(&scrim_bin)
+        .args(["config", "--platform", "macos-aarch64"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("node:"));
+    assert!(stdout.contains("/opt/homebrew/bin/mac_node"));
+    assert!(!stdout.contains("/bin/linux_node"));
+    assert!(stdout.contains("only_mac:"));
+    assert!(stdout.contains("universal:"));
+    assert!(!stdout.contains("only_linux:"));
+
+    // 2. scrim config -p macos-aarch64 only_mac
+    let out = Command::new(&scrim_bin)
+        .args(["config", "-p", "macos-aarch64", "only_mac"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("system_path: /opt/homebrew/bin/only_mac"));
+
+    // 3. scrim config --platform macos-aarch64 only_linux (unconfigured tool for target platform)
+    let out = Command::new(&scrim_bin)
+        .args(["config", "--platform", "macos-aarch64", "only_linux"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("[Scrim] Error: Tool 'only_linux' is not configured for platform 'macos-aarch64'"));
+
+    // 4. scrim config --platform linux_x86_64 (invalid delimiter error)
+    let out = Command::new(&scrim_bin)
+        .args(["config", "--platform", "linux_x86_64"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("[Scrim] Error: Invalid platform string 'linux_x86_64'"));
+
+    // 5. scrim which --platform macos-aarch64 node
+    let out = Command::new(&scrim_bin)
+        .args(["which", "--platform", "macos-aarch64", "node"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(stdout.trim(), "/opt/homebrew/bin/mac_node");
+
+    // 6. scrim which -p macos-aarch64 only_mac
+    let out = Command::new(&scrim_bin)
+        .args(["which", "-p", "macos-aarch64", "only_mac"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(stdout.trim(), "/opt/homebrew/bin/only_mac");
+
+    // 7. scrim which --platform macos-aarch64 only_linux (unconfigured tool error)
+    let out = Command::new(&scrim_bin)
+        .args(["which", "--platform", "macos-aarch64", "only_linux"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("[Scrim] Error: Tool 'only_linux' is not configured for platform 'macos-aarch64'"));
+
+    // 8. scrim which --platform darwin-arm64 node (synonym actionable error)
+    let out = Command::new(&scrim_bin)
+        .args(["which", "--platform", "darwin-arm64", "node"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("darwin"));
+}
+
+#[test]
+fn test_platform_links_host_filtering_and_cleanup() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    let bin_dir = temp_path.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+
+    let host_os = std::env::consts::OS;
+    let non_host_os = if host_os == "linux" { "macos" } else { "linux" };
+    let non_host_platform = format!("{}-aarch64", non_host_os);
+
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    fs::write(
+        &scrim_yaml,
+        format!(
+            r#"
+telemetry: false
+tools:
+  host_tool:
+    platforms:
+      any:
+        system_path: /bin/echo
+  other_tool:
+    platforms:
+      {}:
+        system_path: /bin/other
+"#,
+            non_host_platform
+        ),
+    )
+    .unwrap();
+
+    // Pre-create an obsolete link for other_tool pointing to scrim
+    let obsolete_link = bin_dir.join("other_tool");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &obsolete_link).unwrap();
+    assert!(obsolete_link.exists());
+
+    // 1. Dry run
+    let out_dry = Command::new(&scrim_bin)
+        .args(["links", "-n", "bin"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    assert_eq!(out_dry.status.code(), Some(2));
+    let stderr_dry = String::from_utf8(out_dry.stderr).unwrap();
+    assert!(stderr_dry.contains("[Scrim] Would link host_tool"));
+    assert!(stderr_dry.contains("[Scrim] Would remove obsolete link other_tool"));
+    assert!(!bin_dir.join("host_tool").exists());
+    assert!(obsolete_link.exists());
+
+    // 2. Normal run
+    let out = Command::new(&scrim_bin)
+        .args(["links", "bin"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stderr_out = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr_out.contains("[Scrim] Linked host_tool"));
+    assert!(stderr_out.contains("[Scrim] Removed obsolete link other_tool"));
+    assert!(bin_dir.join("host_tool").exists());
+    assert!(!bin_dir.join("other_tool").exists());
+
+    // 3. Second run should be idempotent
+    let out_clean = Command::new(&scrim_bin)
+        .args(["links", "bin"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    assert!(out_clean.status.success());
+    let stderr_clean = String::from_utf8(out_clean.stderr).unwrap();
+    assert!(stderr_clean.contains("[Scrim] All links are correct"));
+}
+
+#[test]
+fn test_platform_run_and_proxy_unconfigured_tool_error() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    let host_os = std::env::consts::OS;
+    let non_host_os = if host_os == "linux" { "macos" } else { "linux" };
+    let non_host_platform = format!("{}-aarch64", non_host_os);
+
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    fs::write(
+        &scrim_yaml,
+        format!(
+            r#"
+telemetry: false
+tools:
+  non_host_tool:
+    platforms:
+      {}:
+        system_path: /bin/echo
+"#,
+            non_host_platform
+        ),
+    )
+    .unwrap();
+
+    // 1. scrim run non_host_tool
+    let out = Command::new(&scrim_bin)
+        .args(["run", "non_host_tool"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("[Scrim] Error: Tool 'non_host_tool' is not configured for platform '"));
+
+    // 2. Proxy execution via symlink non_host_tool -> scrim
+    let proxy_shim = temp_path.join("non_host_tool");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &proxy_shim).unwrap();
+
+    let out_proxy = Command::new(&proxy_shim)
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    assert_eq!(out_proxy.status.code(), Some(1));
+    let stderr_proxy = String::from_utf8(out_proxy.stderr).unwrap();
+    assert!(stderr_proxy.contains("[Scrim] Error: Tool 'non_host_tool' is not configured for platform '"));
+}
+
 
 
 

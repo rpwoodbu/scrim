@@ -1,5 +1,7 @@
 use config::Config;
 use logger::{scrim_error, scrim_progress};
+use resolver::resolve_tool;
+use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::{Component, Path, PathBuf};
@@ -52,14 +54,31 @@ pub fn create_links(
         scrim_progress!("Updating links in dry-run mode");
     }
 
-    // 1. Create or update symlinks for configured tools
+    // 1. Create or update symlinks for configured tools on host platform
     let mut tool_names: Vec<_> = config.tools.keys().cloned().collect();
     tool_names.sort();
 
-    let mut modified = false;
+    let mut host_configured_tools = BTreeSet::new();
     let mut had_errors = false;
 
     for tool in &tool_names {
+        match resolve_tool(tool, config) {
+            Ok(Some(_)) => {
+                host_configured_tools.insert(tool.clone());
+            }
+            Ok(None) => {
+                // Not configured for current host platform, skip
+            }
+            Err(e) => {
+                scrim_error!("{}", e);
+                had_errors = true;
+            }
+        }
+    }
+
+    let mut modified = false;
+
+    for tool in &host_configured_tools {
         let link_path = target_dir.join(tool);
 
         if let Ok(meta) = fs::symlink_metadata(&link_path) {
@@ -110,8 +129,8 @@ pub fn create_links(
                     None => continue,
                 };
 
-                // If this file is a tool in the config, it was just processed above
-                if config.tools.contains_key(&file_name) {
+                // If this file is a tool configured for the host platform, it was just processed above
+                if host_configured_tools.contains(&file_name) {
                     continue;
                 }
 
@@ -179,6 +198,21 @@ mod tests {
     use std::collections::BTreeMap;
     use tempfile::tempdir;
 
+    fn mock_host_tool() -> ToolConfig {
+        let mut platforms = BTreeMap::new();
+        platforms.insert(
+            "any".to_string(),
+            config::PlatformToolConfig {
+                system_path: Some("/bin/echo".to_string()),
+                ..Default::default()
+            },
+        );
+        ToolConfig {
+            platforms,
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn test_path_relative_from_same_dir() {
         let target = Path::new("/usr/local/bin/scrim");
@@ -227,8 +261,8 @@ mod tests {
         fs::write(&other_file, "content").unwrap();
 
         let mut tools = BTreeMap::new();
-        tools.insert("node".to_string(), ToolConfig::default());
-        tools.insert("go".to_string(), ToolConfig::default());
+        tools.insert("node".to_string(), mock_host_tool());
+        tools.insert("go".to_string(), mock_host_tool());
         let config = Config {
             telemetry: None,
             tools,
@@ -275,7 +309,7 @@ mod tests {
         symlink(Path::new("../scrim"), &stale_link).unwrap();
 
         let mut tools = BTreeMap::new();
-        tools.insert("node".to_string(), ToolConfig::default());
+        tools.insert("node".to_string(), mock_host_tool());
         let config = Config {
             telemetry: None,
             tools,
@@ -320,9 +354,9 @@ mod tests {
 
         // 3. Tool 'rust' does not exist yet
         let mut tools = BTreeMap::new();
-        tools.insert("node".to_string(), ToolConfig::default());
-        tools.insert("go".to_string(), ToolConfig::default());
-        tools.insert("rust".to_string(), ToolConfig::default());
+        tools.insert("node".to_string(), mock_host_tool());
+        tools.insert("go".to_string(), mock_host_tool());
+        tools.insert("rust".to_string(), mock_host_tool());
         let config = Config {
             telemetry: None,
             tools,
@@ -345,6 +379,68 @@ mod tests {
         let rust_link = bin_dir.join("rust");
         assert!(rust_link.exists());
         assert_eq!(fs::read_link(&rust_link).unwrap(), Path::new("../scrim"));
+    }
+
+    #[test]
+    fn test_create_links_host_platform_filtering() {
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+
+        let scrim_exe = dir.path().join("scrim");
+        fs::write(&scrim_exe, "dummy_scrim").unwrap();
+
+        let host = config::Platform::host().unwrap();
+        let non_host_os = if host.os == config::Os::Linux { "macos" } else { "linux" };
+        let non_host_platform = format!("{}-aarch64", non_host_os);
+
+        let mut tools = BTreeMap::new();
+        // Tool 1: Configured for host
+        tools.insert("host_tool".to_string(), mock_host_tool());
+
+        // Tool 2: Configured only for a different OS/platform
+        let mut non_host_plat_map = BTreeMap::new();
+        non_host_plat_map.insert(
+            non_host_platform,
+            config::PlatformToolConfig {
+                system_path: Some("/bin/non_host_bin".to_string()),
+                ..Default::default()
+            },
+        );
+        tools.insert(
+            "unconfigured_tool".to_string(),
+            ToolConfig {
+                platforms: non_host_plat_map,
+                ..Default::default()
+            },
+        );
+
+        let config = Config {
+            telemetry: None,
+            tools,
+            ..Default::default()
+        };
+
+        // Pre-create an obsolete link for unconfigured_tool pointing to scrim
+        let obsolete_link = bin_dir.join("unconfigured_tool");
+        symlink(Path::new("../scrim"), &obsolete_link).unwrap();
+        assert!(obsolete_link.exists());
+
+        // Run dry-run first
+        let dry_modified = create_links(&bin_dir, &scrim_exe, &config, true).unwrap();
+        assert!(dry_modified);
+        // Link for host_tool not created yet, obsolete link not removed yet
+        assert!(!bin_dir.join("host_tool").exists());
+        assert!(obsolete_link.exists());
+
+        // Normal run
+        let modified = create_links(&bin_dir, &scrim_exe, &config, false).unwrap();
+        assert!(modified);
+
+        // Host tool link was created
+        assert!(bin_dir.join("host_tool").exists());
+        // Unconfigured tool link was removed
+        assert!(!bin_dir.join("unconfigured_tool").exists());
     }
 
     #[test]

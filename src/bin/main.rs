@@ -3,7 +3,7 @@ use config::Config;
 use fetcher::{cached_binary_path, fetch_tool};
 use linker::create_links;
 use logger::scrim_error;
-use resolver::{resolve_tool, Resolution};
+use resolver::{resolve_tool_for_platform, Resolution};
 use telemetry::report_usage;
 use version::format_version;
 
@@ -77,9 +77,25 @@ fn handle_management_command(args: &[std::ffi::OsString], app_env: &AppEnvironme
         CliParseResult::Command(CliCommand::Version) => {
             println!("{}", format_version(BINARY_COMMIT));
         }
-        CliParseResult::Command(CliCommand::Config { tool }) => {
+        CliParseResult::Command(CliCommand::Config { tool, platform }) => {
+            let target_platform = match platform {
+                Some(p_str) => match config::Platform::parse(&p_str) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        scrim_error!("{}", e);
+                        std::process::exit(1);
+                    }
+                },
+                None => match config::Platform::host() {
+                    Ok(p) => p,
+                    Err(e) => {
+                        scrim_error!("{}", e);
+                        std::process::exit(1);
+                    }
+                },
+            };
             let config = load_configuration(app_env);
-            match config.format_yaml(tool.as_deref()) {
+            match config.format_yaml_for_platform(tool.as_deref(), &target_platform) {
                 Ok(yaml) => print!("{}", yaml),
                 Err(e) => {
                     scrim_error!("{}", e);
@@ -111,8 +127,8 @@ fn handle_management_command(args: &[std::ffi::OsString], app_env: &AppEnvironme
         CliParseResult::Command(CliCommand::Run { tool, args }) => {
             execute_tool(&tool, &args, app_env);
         }
-        CliParseResult::Command(CliCommand::Which { tool }) => {
-            which_tool(&tool, app_env);
+        CliParseResult::Command(CliCommand::Which { tool, platform }) => {
+            which_tool(&tool, platform.as_deref(), app_env);
         }
         CliParseResult::Help(text) => {
             print!("{}", text);
@@ -130,8 +146,16 @@ fn proxy_command(program_name: &str, args: &[std::ffi::OsString], app_env: &AppE
 }
 
 fn execute_tool(program_name: &str, tool_args: &[std::ffi::OsString], app_env: &AppEnvironment) -> ! {
+    let host_platform = match config::Platform::host() {
+        Ok(p) => p,
+        Err(e) => {
+            scrim_error!("{}", e);
+            std::process::exit(1);
+        }
+    };
     let config = load_configuration(app_env);
-    let target_path = resolve_target_binary_path(program_name, &config, app_env, true);
+    let target_path =
+        resolve_target_binary_path(program_name, &config, &host_platform, app_env, true);
 
     // Prepare the command
     let mut cmd = Command::new(&target_path);
@@ -154,22 +178,48 @@ fn execute_tool(program_name: &str, tool_args: &[std::ffi::OsString], app_env: &
     std::process::exit(1);
 }
 
-fn which_tool(program_name: &str, app_env: &AppEnvironment) {
+fn which_tool(program_name: &str, platform_arg: Option<&str>, app_env: &AppEnvironment) {
+    let target_platform = match platform_arg {
+        Some(p_str) => match config::Platform::parse(p_str) {
+            Ok(p) => p,
+            Err(e) => {
+                scrim_error!("{}", e);
+                std::process::exit(1);
+            }
+        },
+        None => match config::Platform::host() {
+            Ok(p) => p,
+            Err(e) => {
+                scrim_error!("{}", e);
+                std::process::exit(1);
+            }
+        },
+    };
     let config = load_configuration(app_env);
-    let target_path = resolve_target_binary_path(program_name, &config, app_env, false);
+    let target_path =
+        resolve_target_binary_path(program_name, &config, &target_platform, app_env, false);
     println!("{}", target_path.display());
 }
 
 fn resolve_target_binary_path(
     program_name: &str,
     config: &Config,
+    platform: &config::Platform,
     app_env: &AppEnvironment,
     fetch_if_missing: bool,
 ) -> PathBuf {
-    let resolution = match resolve_tool(program_name, config) {
+    let resolution = match resolve_tool_for_platform(program_name, config, platform) {
         Ok(Some(res)) => res,
         Ok(None) => {
-            scrim_error!("Tool '{}' not found in config", program_name);
+            if config.tools.contains_key(program_name) {
+                scrim_error!(
+                    "Tool '{}' is not configured for platform '{}'",
+                    program_name,
+                    platform
+                );
+            } else {
+                scrim_error!("Tool '{}' not found in config", program_name);
+            }
             std::process::exit(1);
         }
         Err(e) => {

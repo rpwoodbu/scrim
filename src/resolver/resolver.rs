@@ -93,6 +93,9 @@ pub fn resolve_tool_for_platform(
             if let Some(template_config) = config.tools.get(template_name) {
                 if template_config.template.is_none() {
                     let template_plat_opt = template_config.get_platform(platform);
+                    if !template_config.platforms.is_empty() && template_plat_opt.is_none() {
+                        return Ok(None);
+                    }
 
                     let tmpl_url = template_plat_opt
                         .and_then(|p| p.url.as_deref())
@@ -584,6 +587,10 @@ tools:
                 },
                 archive_path: Some("go/bin/gofmt-darwin".to_string()),
             })))
+        );
+        assert_eq!(
+            resolve_tool_for_platform("gofmt", &config, &linux_aarch64),
+            Ok(None)
         );
     }
 }

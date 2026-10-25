@@ -7,6 +7,7 @@ pub enum CliCommand {
     Version,
     Config {
         tool: Option<String>,
+        platform: Option<String>,
     },
     Links {
         dir: PathBuf,
@@ -18,6 +19,7 @@ pub enum CliCommand {
     },
     Which {
         tool: String,
+        platform: Option<String>,
     },
 }
 
@@ -44,6 +46,13 @@ pub fn build_cli() -> Command {
             Command::new("config")
                 .about(
                     "Reports the resultant aggregated configuration after resolving all configuration layers.",
+                )
+                .arg(
+                    Arg::new("platform")
+                        .long("platform")
+                        .short('p')
+                        .value_name("PLATFORM")
+                        .help("Target platform to evaluate."),
                 )
                 .arg(Arg::new("tool").value_name("TOOL")),
         )
@@ -79,6 +88,13 @@ pub fn build_cli() -> Command {
         .subcommand(
             Command::new("which")
                 .about("Locates and prints the absolute path of the binary that would be executed for a tool without running it.")
+                .arg(
+                    Arg::new("platform")
+                        .long("platform")
+                        .short('p')
+                        .value_name("PLATFORM")
+                        .help("Target platform to evaluate."),
+                )
                 .arg(Arg::new("tool").value_name("TOOL")),
         )
 }
@@ -94,7 +110,8 @@ where
             Some(("version", _)) => CliParseResult::Command(CliCommand::Version),
             Some(("config", sub_matches)) => {
                 let tool = sub_matches.get_one::<String>("tool").cloned();
-                CliParseResult::Command(CliCommand::Config { tool })
+                let platform = sub_matches.get_one::<String>("platform").cloned();
+                CliParseResult::Command(CliCommand::Config { tool, platform })
             }
             Some(("links", sub_matches)) => {
                 let Some(dir) = sub_matches.get_one::<String>("dir").map(PathBuf::from) else {
@@ -124,7 +141,8 @@ where
                         "tool name argument required for which command".to_string(),
                     );
                 };
-                CliParseResult::Command(CliCommand::Which { tool })
+                let platform = sub_matches.get_one::<String>("platform").cloned();
+                CliParseResult::Command(CliCommand::Which { tool, platform })
             }
             _ => unreachable!(),
         },
@@ -220,18 +238,78 @@ mod tests {
     fn test_config_subcommand() {
         assert_eq!(
             parse_management_cli(["scrim", "config"]),
-            CliParseResult::Command(CliCommand::Config { tool: None })
+            CliParseResult::Command(CliCommand::Config {
+                tool: None,
+                platform: None,
+            })
         );
         assert_eq!(
             parse_management_cli(["scrim", "config", "node"]),
             CliParseResult::Command(CliCommand::Config {
-                tool: Some("node".to_string())
+                tool: Some("node".to_string()),
+                platform: None,
+            })
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "config", "--platform", "linux-x86_64"]),
+            CliParseResult::Command(CliCommand::Config {
+                tool: None,
+                platform: Some("linux-x86_64".to_string()),
+            })
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "config", "-p", "linux-x86_64"]),
+            CliParseResult::Command(CliCommand::Config {
+                tool: None,
+                platform: Some("linux-x86_64".to_string()),
+            })
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "config", "--platform", "linux-x86_64", "node"]),
+            CliParseResult::Command(CliCommand::Config {
+                tool: Some("node".to_string()),
+                platform: Some("linux-x86_64".to_string()),
+            })
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "config", "node", "--platform", "linux-x86_64"]),
+            CliParseResult::Command(CliCommand::Config {
+                tool: Some("node".to_string()),
+                platform: Some("linux-x86_64".to_string()),
+            })
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "config", "node", "-p", "linux-x86_64"]),
+            CliParseResult::Command(CliCommand::Config {
+                tool: Some("node".to_string()),
+                platform: Some("linux-x86_64".to_string()),
+            })
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "config", "-p", "linux-x86_64", "node"]),
+            CliParseResult::Command(CliCommand::Config {
+                tool: Some("node".to_string()),
+                platform: Some("linux-x86_64".to_string()),
             })
         );
         match parse_management_cli(["scrim", "config", "node", "extra"]) {
             CliParseResult::Error(err) => {
                 assert!(!err.starts_with("error: "));
                 assert!(err.contains("unexpected argument 'extra'"));
+            }
+            other => panic!("Expected Error, got {:?}", other),
+        }
+        match parse_management_cli(["scrim", "config", "--unknown"]) {
+            CliParseResult::Error(err) => {
+                assert!(!err.starts_with("error: "));
+                assert!(err.contains("unexpected argument '--unknown'"));
+            }
+            other => panic!("Expected Error, got {:?}", other),
+        }
+        match parse_management_cli(["scrim", "config", "--platform"]) {
+            CliParseResult::Error(err) => {
+                assert!(!err.starts_with("error: "));
+                assert!(err.contains("a value is required for '--platform <PLATFORM>'"));
             }
             other => panic!("Expected Error, got {:?}", other),
         }
@@ -246,13 +324,60 @@ mod tests {
         assert_eq!(
             parse_management_cli(["scrim", "which", "node"]),
             CliParseResult::Command(CliCommand::Which {
-                tool: "node".to_string()
+                tool: "node".to_string(),
+                platform: None,
             })
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "which", "--platform", "linux-x86_64", "node"]),
+            CliParseResult::Command(CliCommand::Which {
+                tool: "node".to_string(),
+                platform: Some("linux-x86_64".to_string()),
+            })
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "which", "node", "--platform", "linux-x86_64"]),
+            CliParseResult::Command(CliCommand::Which {
+                tool: "node".to_string(),
+                platform: Some("linux-x86_64".to_string()),
+            })
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "which", "-p", "linux-x86_64", "node"]),
+            CliParseResult::Command(CliCommand::Which {
+                tool: "node".to_string(),
+                platform: Some("linux-x86_64".to_string()),
+            })
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "which", "node", "-p", "linux-x86_64"]),
+            CliParseResult::Command(CliCommand::Which {
+                tool: "node".to_string(),
+                platform: Some("linux-x86_64".to_string()),
+            })
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "which", "--platform", "linux-x86_64"]),
+            CliParseResult::Error("tool name argument required for which command".to_string())
         );
         match parse_management_cli(["scrim", "which", "node", "extra"]) {
             CliParseResult::Error(err) => {
                 assert!(!err.starts_with("error: "));
                 assert!(err.contains("unexpected argument 'extra'"));
+            }
+            other => panic!("Expected Error, got {:?}", other),
+        }
+        match parse_management_cli(["scrim", "which", "--unknown", "node"]) {
+            CliParseResult::Error(err) => {
+                assert!(!err.starts_with("error: "));
+                assert!(err.contains("unexpected argument '--unknown'"));
+            }
+            other => panic!("Expected Error, got {:?}", other),
+        }
+        match parse_management_cli(["scrim", "which", "node", "--platform"]) {
+            CliParseResult::Error(err) => {
+                assert!(!err.starts_with("error: "));
+                assert!(err.contains("a value is required for '--platform <PLATFORM>'"));
             }
             other => panic!("Expected Error, got {:?}", other),
         }
