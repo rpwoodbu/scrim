@@ -40,26 +40,55 @@ The only other requirement is that each tool needs to have a link (symbolic or h
 
 ```yaml
 telemetry: true # disabled (false) by default
+default_platform: linux-x86_64 # optional file-level default platform
 imports:
   - base-tools.yaml
   - path: ../overrides/tools.yaml
     optional: true
     precedence: after
 tools:
+  # Uses default_platform:
   node:
     system_path: /bin/node
-  go:
-    # Uses system_path if it exists on disk; falls back to fetching via url if absent
-    system_path: /usr/local/go/bin/go
-    url: https://go.dev/dl/go1.21.5.linux-amd64.tar.gz
+    url: https://nodejs.org/dist/v20.10.0/node-v20.10.0-linux-x64.tar.gz
     sha256: 285c1f0624022839446d32839446d32839446d32839446d32839446d32839446
-    archive_path: go/bin/go
+    archive_path: node-v20.10.0-linux-x64/bin/node
+
+  # Explicit multi-platform matrix:
+  go:
+    archive_path: go/bin/go # default archive_path across platforms
+    platforms:
+      linux-x86_64:
+        # Uses system_path if it exists on disk; falls back to fetching via url if absent
+        system_path: /usr/local/go/bin/go
+        url: https://go.dev/dl/go1.21.5.linux-amd64.tar.gz
+        sha256: 285c1f0624022839446d32839446d32839446d32839446d32839446d32839446
+      linux-aarch64:
+        system_path: /usr/local/go/bin/go
+        url: https://go.dev/dl/go1.21.5.linux-arm64.tar.gz
+        sha256: 9e06e39958dc1800cfc244490f2beeeff3dbb2bc61e389d70231cfb565a973bb
+      macos-aarch64:
+        system_path: /opt/homebrew/bin/go
+        url: https://go.dev/dl/go1.21.5.darwin-arm64.tar.gz
+        sha256: 7d6c5c8f285c1f0624022839446d32839446d32839446d32839446d32839446d
+
+  # Universal tool / script:
+  local-helper:
+    platforms:
+      any:
+        system_path: /usr/local/bin/local-helper
+
+  # Templated tool:
   gofmt:
     template: go
     archive_path: go/bin/gofmt
+
+  # AppImage package:
   vim:
-    url: https://github.com/vim/vim-appimage/releases/download/v9.2.1225/Vim-v9.2.1225.glibc2.34-x86_64.AppImage
-    sha256: fb78530264806ee19eb014d6e5344d42e3434b12f646d661f68042227ff34057
+    platforms:
+      linux-x86_64:
+        url: https://github.com/vim/vim-appimage/releases/download/v9.2.1225/Vim-v9.2.1225.glibc2.34-x86_64.AppImage
+        sha256: fb78530264806ee19eb014d6e5344d42e3434b12f646d661f68042227ff34057
   xxd:
     template: vim
     archive_path: usr/bin/xxd
