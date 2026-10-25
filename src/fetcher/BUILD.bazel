@@ -8,10 +8,10 @@ rust_library(
     visibility = ["//src/bin:__pkg__"],
     deps = [
         ":appimage",
+        ":hashing",
         "//src/logger",
         "@crates//:flate2",
         "@crates//:lzma-rs",
-        "@crates//:sha2",
         "@crates//:tar",
         "@crates//:tempfile",
         "@crates//:ureq",
@@ -24,8 +24,24 @@ rust_test(
     crate = ":fetcher",
     deps = [
         "//tests:test_helpers",
+        "@crates//:sha2",
         "@crates//:tempfile",
     ],
+)
+
+rust_library(
+    name = "hashing",
+    srcs = ["hashing.rs"],
+    crate_root = "hashing.rs",
+    edition = "2021",
+    deps = [
+        "@crates//:sha2",
+    ],
+)
+
+rust_test(
+    name = "hashing_test",
+    crate = ":hashing",
 )
 
 rust_library(

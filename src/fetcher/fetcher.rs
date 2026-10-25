@@ -1,56 +1,11 @@
 use std::path::{Path, PathBuf};
 use std::fs::{self, File};
 use std::io::{self, Seek, Write};
-use sha2::{Sha256, Sha512, Digest};
 use flate2::read::GzDecoder;
 use tar::Archive;
 use zip::ZipArchive;
 use appimage::extract_appimage;
-
-enum HasherInstance {
-    Sha256(Sha256),
-    Sha512(Sha512),
-}
-
-impl HasherInstance {
-    fn new(algorithm: &str) -> Self {
-        match algorithm {
-            "sha512" => HasherInstance::Sha512(Sha512::new()),
-            _ => HasherInstance::Sha256(Sha256::new()),
-        }
-    }
-
-    fn update(&mut self, buf: &[u8]) {
-        match self {
-            HasherInstance::Sha256(h) => h.update(buf),
-            HasherInstance::Sha512(h) => h.update(buf),
-        }
-    }
-
-    fn finalize_hex(self) -> String {
-        match self {
-            HasherInstance::Sha256(h) => format!("{:x}", h.finalize()),
-            HasherInstance::Sha512(h) => format!("{:x}", h.finalize()),
-        }
-    }
-}
-
-struct HashingWriter<W> {
-    writer: W,
-    hasher: HasherInstance,
-}
-
-impl<W: Write> Write for HashingWriter<W> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let n = self.writer.write(buf)?;
-        self.hasher.update(&buf[..n]);
-        Ok(n)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.writer.flush()
-    }
-}
+use hashing::HashingWriter;
 
 fn cached_urls_contain(url_file: &Path, url: &str) -> bool {
     if let Ok(content) = fs::read_to_string(url_file) {
@@ -161,10 +116,7 @@ pub fn fetch_tool(
 
     // Download to a temporary file in the tools directory
     let mut temp_file = tempfile::NamedTempFile::new_in(tools_dir)?;
-    let mut hw = HashingWriter {
-        writer: &mut temp_file,
-        hasher: HasherInstance::new(digest_algorithm),
-    };
+    let mut hw = HashingWriter::new(&mut temp_file, digest_algorithm)?;
 
     if let Some(local_path) = url.strip_prefix("file://") {
         let local_path = local_path.split('?').next().unwrap_or(local_path);
@@ -188,18 +140,7 @@ pub fn fetch_tool(
         io::copy(&mut reader, &mut hw)?;
     }
 
-    let computed_digest = hw.hasher.finalize_hex();
-
-    if computed_digest != digest_value {
-        let err_msg = format!(
-            "{} verification failed for {}.\nExpected: {}\nActual:   {}",
-            digest_algorithm.to_uppercase(),
-            tool_name,
-            digest_value,
-            computed_digest
-        );
-        return Err(err_msg.into());
-    }
+    hw.verify_digest(tool_name, digest_algorithm, digest_value)?;
 
     if is_archive {
         logger::scrim_progress!("Unpacking {} archive...", tool_name);
@@ -341,6 +282,7 @@ pub fn fetch_tool(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256, Sha512};
     use tempfile::tempdir;
 
     #[test]
