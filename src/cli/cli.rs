@@ -16,6 +16,9 @@ pub enum CliCommand {
         tool: Option<String>,
         args: Vec<OsString>,
     },
+    Which {
+        tool: Option<String>,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -73,6 +76,11 @@ pub fn build_cli() -> Command {
                         .num_args(0..),
                 ),
         )
+        .subcommand(
+            Command::new("which")
+                .about("Locates and prints the absolute path of the binary that would be executed for a tool without running it.")
+                .arg(Arg::new("tool").value_name("TOOL")),
+        )
 }
 
 pub fn parse_management_cli<I, T>(itr: I) -> CliParseResult
@@ -101,6 +109,10 @@ where
                     .cloned()
                     .collect();
                 CliParseResult::Command(CliCommand::Run { tool, args })
+            }
+            Some(("which", sub_matches)) => {
+                let tool = sub_matches.get_one::<String>("tool").cloned();
+                CliParseResult::Command(CliCommand::Which { tool })
             }
             _ => unreachable!(),
         },
@@ -197,6 +209,26 @@ mod tests {
             })
         );
         match parse_management_cli(["scrim", "config", "node", "extra"]) {
+            CliParseResult::Error(err) => {
+                assert!(err.contains("unexpected argument 'extra'"));
+            }
+            other => panic!("Expected Error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_which_subcommand() {
+        assert_eq!(
+            parse_management_cli(["scrim", "which"]),
+            CliParseResult::Command(CliCommand::Which { tool: None })
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "which", "node"]),
+            CliParseResult::Command(CliCommand::Which {
+                tool: Some("node".to_string())
+            })
+        );
+        match parse_management_cli(["scrim", "which", "node", "extra"]) {
             CliParseResult::Error(err) => {
                 assert!(err.contains("unexpected argument 'extra'"));
             }

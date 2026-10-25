@@ -74,7 +74,14 @@ pub fn resolve_tool(program_name: &str, config: Option<&Config>) -> Result<Optio
                 return Err(format!("Tool '{}' specifies 'archive_path' but provides no 'url' or 'template'.", program_name));
             }
 
-            // Rule 6: Empty tool configurations are invalid
+            // Rule 6: `system_path` must be an absolute path
+            if let Some(path) = &tool_config.system_path {
+                if !std::path::Path::new(path).is_absolute() {
+                    return Err(format!("Tool '{}' specifies relative system_path '{}'. 'system_path' must be an absolute path.", program_name, path));
+                }
+            }
+
+            // Rule 7: Empty tool configurations are invalid
             if !has_system_path && !has_url && !has_template {
                 return Err(format!("Tool '{}' has an empty configuration. Every tool must specify a 'system_path', 'url', or 'template'.", program_name));
             }
@@ -379,7 +386,22 @@ mod tests {
         );
 
         let mut tools2 = BTreeMap::new();
-        tools2.insert("empty_tool".to_string(), ToolConfig {
+        tools2.insert("rel_path_tool".to_string(), ToolConfig {
+            system_path: Some("./bin/relative".to_string()),
+            url: None,
+            sha256: None,
+            sha512: None,
+            archive_path: None,
+            template: None,
+        });
+        let config_rel = Config { tools: tools2, telemetry: Some(true), ..Default::default() };
+        assert_eq!(
+            resolve_tool("rel_path_tool", Some(&config_rel)),
+            Err("Tool 'rel_path_tool' specifies relative system_path './bin/relative'. 'system_path' must be an absolute path.".to_string())
+        );
+
+        let mut tools3 = BTreeMap::new();
+        tools3.insert("empty_tool".to_string(), ToolConfig {
             system_path: None,
             url: None,
             sha256: None,
@@ -387,7 +409,7 @@ mod tests {
             archive_path: None,
             template: None,
         });
-        let config2 = Config { tools: tools2, telemetry: Some(true), ..Default::default() };
+        let config2 = Config { tools: tools3, telemetry: Some(true), ..Default::default() };
         
         assert_eq!(
             resolve_tool("empty_tool", Some(&config2)),

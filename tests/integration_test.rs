@@ -2284,5 +2284,217 @@ tools:
     assert!(stdout2.contains("Fetched Tool Executed: args=world"));
 }
 
+#[test]
+fn test_scrim_which_command() {
+    let scrim_bin = find_scrim_bin();
+    let temp_dir = tempdir().unwrap();
+    let temp_path = temp_dir.path();
+
+    let fake_home = temp_path.join("home");
+    fs::create_dir_all(&fake_home).unwrap();
+
+    let existing_system_tool = temp_path.join("existing_tool");
+    fs::write(&existing_system_tool, "#!/bin/sh\n").unwrap();
+
+    let nonexistent_system_tool = temp_path.join("nonexistent_tool");
+
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    let config_content = format!(
+        r#"
+telemetry: false
+tools:
+  sys_tool:
+    system_path: "{}"
+  sys_with_fallback_exists:
+    system_path: "{}"
+    url: "https://example.com/tool.tar.gz"
+    sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    archive_path: "bin/tool"
+  sys_with_fallback_missing:
+    system_path: "{}"
+    url: "https://example.com/tool.tar.gz"
+    sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    archive_path: "bin/tool"
+  fetch_tar_gz:
+    url: "https://example.com/archive.tar.gz"
+    sha256: "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+    archive_path: "bin/archive_bin"
+  fetch_default_archive:
+    url: "https://example.com/archive.tar.gz"
+    sha256: "1111111111111111111111111111111111111111111111111111111111111111"
+  fetch_appimage:
+    url: "https://example.com/app.AppImage"
+    sha256: "2222222222222222222222222222222222222222222222222222222222222222"
+  fetch_binary:
+    url: "https://example.com/single_bin"
+    sha256: "3333333333333333333333333333333333333333333333333333333333333333"
+  template_base:
+    url: "https://example.com/base.tar.gz"
+    sha256: "4444444444444444444444444444444444444444444444444444444444444444"
+    archive_path: "bin/base"
+  templated_tool:
+    template: template_base
+    archive_path: "bin/sub_tool"
+"#,
+        existing_system_tool.to_str().unwrap(),
+        existing_system_tool.to_str().unwrap(),
+        nonexistent_system_tool.to_str().unwrap(),
+    );
+    fs::write(&scrim_yaml, config_content).unwrap();
+
+    let expected_cache_dir = fake_home.join(".cache/scrim/tools");
+
+    // 1. sys_tool
+    let out = Command::new(&scrim_bin)
+        .args(["which", "sys_tool"])
+        .current_dir(temp_path)
+        .env("HOME", &fake_home)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), existing_system_tool.to_str().unwrap());
+
+    // 2. sys_with_fallback_exists -> points to system_path
+    let out = Command::new(&scrim_bin)
+        .args(["which", "sys_with_fallback_exists"])
+        .current_dir(temp_path)
+        .env("HOME", &fake_home)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), existing_system_tool.to_str().unwrap());
+
+    // 3. sys_with_fallback_missing -> points to cache binary path
+    let out = Command::new(&scrim_bin)
+        .args(["which", "sys_with_fallback_missing"])
+        .current_dir(temp_path)
+        .env("HOME", &fake_home)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let expected_path = expected_cache_dir
+        .join("sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+        .join("bin/tool");
+    assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), expected_path.to_str().unwrap());
+    // Also verify that it did not actually create/fetch the file
+    assert!(!expected_path.exists());
+
+    // 4. fetch_tar_gz
+    let out = Command::new(&scrim_bin)
+        .args(["which", "fetch_tar_gz"])
+        .current_dir(temp_path)
+        .env("HOME", &fake_home)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let expected_path = expected_cache_dir
+        .join("sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
+        .join("bin/archive_bin");
+    assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), expected_path.to_str().unwrap());
+
+    // 5. fetch_default_archive
+    let out = Command::new(&scrim_bin)
+        .args(["which", "fetch_default_archive"])
+        .current_dir(temp_path)
+        .env("HOME", &fake_home)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let expected_path = expected_cache_dir
+        .join("sha256:1111111111111111111111111111111111111111111111111111111111111111")
+        .join("fetch_default_archive");
+    assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), expected_path.to_str().unwrap());
+
+    // 6. fetch_appimage -> default AppRun
+    let out = Command::new(&scrim_bin)
+        .args(["which", "fetch_appimage"])
+        .current_dir(temp_path)
+        .env("HOME", &fake_home)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let expected_path = expected_cache_dir
+        .join("sha256:2222222222222222222222222222222222222222222222222222222222222222")
+        .join("AppRun");
+    assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), expected_path.to_str().unwrap());
+
+    // 7. fetch_binary -> non-archive tool
+    let out = Command::new(&scrim_bin)
+        .args(["which", "fetch_binary"])
+        .current_dir(temp_path)
+        .env("HOME", &fake_home)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let expected_path = expected_cache_dir
+        .join("sha256:3333333333333333333333333333333333333333333333333333333333333333")
+        .join("fetch_binary");
+    assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), expected_path.to_str().unwrap());
+
+    // 8. templated_tool
+    let out = Command::new(&scrim_bin)
+        .args(["which", "templated_tool"])
+        .current_dir(temp_path)
+        .env("HOME", &fake_home)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let expected_path = expected_cache_dir
+        .join("sha256:4444444444444444444444444444444444444444444444444444444444444444")
+        .join("bin/sub_tool");
+    assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), expected_path.to_str().unwrap());
+
+    // 9. Missing tool argument
+    let out = Command::new(&scrim_bin)
+        .args(["which"])
+        .current_dir(temp_path)
+        .env("HOME", &fake_home)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("[Scrim] Error: tool name argument required for which command"));
+
+    // 10. Unknown tool
+    let out = Command::new(&scrim_bin)
+        .args(["which", "nonexistent"])
+        .current_dir(temp_path)
+        .env("HOME", &fake_home)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("[Scrim] Error: Tool 'nonexistent' not found in config"));
+
+    // 11. Relative system_path rejected with actionable error
+    let rel_config = temp_path.join("rel_config");
+    fs::create_dir_all(&rel_config).unwrap();
+    fs::write(
+        rel_config.join("scrim.yaml"),
+        "tools:\n  rel_tool:\n    system_path: ./rel/path\n",
+    ).unwrap();
+    let out = Command::new(&scrim_bin)
+        .args(["which", "rel_tool"])
+        .current_dir(&rel_config)
+        .env("HOME", &fake_home)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("[Scrim] Error: Tool 'rel_tool' specifies relative system_path './rel/path'. 'system_path' must be an absolute path."));
+
+    // 12. Extra arguments rejected
+    let out = Command::new(&scrim_bin)
+        .args(["which", "sys_tool", "extra"])
+        .current_dir(temp_path)
+        .env("HOME", &fake_home)
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("[Scrim] Error: unexpected argument 'extra'"));
+}
+
+
 
 

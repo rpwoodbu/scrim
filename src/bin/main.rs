@@ -1,6 +1,6 @@
 use cli::{parse_management_cli, CliCommand, CliParseResult};
 use config::Config;
-use fetcher::fetch_tool;
+use fetcher::{cached_binary_path, fetch_tool};
 use linker::create_links;
 use logger::scrim_error;
 use resolver::{resolve_tool, FetchResolution, Resolution};
@@ -135,6 +135,16 @@ fn handle_management_command(args: &[std::ffi::OsString], app_env: &AppEnvironme
             };
             execute_tool(&tool_name, &args, app_env);
         }
+        CliParseResult::Command(CliCommand::Which { tool }) => {
+            let tool_name = match tool {
+                Some(t) => t,
+                None => {
+                    scrim_error!("tool name argument required for which command");
+                    std::process::exit(1);
+                }
+            };
+            which_tool(&tool_name, app_env);
+        }
         CliParseResult::Help(text) => {
             print!("{}", text);
         }
@@ -201,6 +211,63 @@ fn execute_tool(program_name: &str, tool_args: &[std::ffi::OsString], app_env: &
             scrim_error!("Tool '{}' not found in config", program_name);
             std::process::exit(1);
         }
+        Err(e) => {
+            scrim_error!("{}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn which_tool(program_name: &str, app_env: &AppEnvironment) {
+    let config = load_configuration(app_env);
+    let resolution = resolve_tool(program_name, Some(&config));
+
+    match resolution {
+        Ok(Some(res)) => {
+            let target_path = match res {
+                Resolution::SystemPath { path, fallback } => {
+                    if path.exists() || fallback.is_none() {
+                        path
+                    } else {
+                        resolve_fetch_path(program_name, &fallback.unwrap(), app_env)
+                    }
+                }
+                Resolution::Fetch(fetch_res) => {
+                    resolve_fetch_path(program_name, &fetch_res, app_env)
+                }
+            };
+            println!("{}", target_path.display());
+        }
+        Ok(None) => {
+            scrim_error!("Tool '{}' not found in config", program_name);
+            std::process::exit(1);
+        }
+        Err(e) => {
+            scrim_error!("{}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn resolve_fetch_path(
+    program_name: &str,
+    fetch: &FetchResolution,
+    app_env: &AppEnvironment,
+) -> PathBuf {
+    let base_cache = config::resolve_cache_dir(
+        app_env.xdg_cache_home.as_deref(),
+        app_env.home_dir.as_deref(),
+    );
+    let tools_dir = base_cache.join("tools");
+    let cache_dir_name = format!("{}:{}", fetch.digest.algorithm.name(), fetch.digest.value);
+    let cache_dir = tools_dir.join(cache_dir_name);
+    match cached_binary_path(
+        program_name,
+        &fetch.url,
+        fetch.archive_path.as_deref(),
+        &cache_dir,
+    ) {
+        Ok(p) => p,
         Err(e) => {
             scrim_error!("{}", e);
             std::process::exit(1);

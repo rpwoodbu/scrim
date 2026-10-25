@@ -35,6 +35,7 @@ When invoked directly as `scrim` (i.e., `argv[0]` is `scrim`), Scrim provides a 
 - `config`: Reports the resultant aggregated configuration after resolving all configuration layers, or reports a specific tool's configuration if an optional tool name argument is provided. Unspecified fields and empty collections are omitted from the output to reduce noise.
 - `links`: Updates links in a specified target directory for all defined tools to point to the `scrim` binary.
 - `run`: Runs a defined tool directly without requiring a link.
+- `which`: Locates and prints the absolute path of the binary that would be executed for a tool without running it.
 
 #### Config Command (`scrim config [TOOL]`)
 
@@ -81,6 +82,15 @@ The `scrim run` command executes any tool defined in the aggregated configuratio
 - **Arguments**: `<TOOL>` (name of the tool to run), followed by any optional arguments `[args...]` to pass through to the executed tool.
 - **Behavior**: Behaves identically to executing `<TOOL>` via a link. Following the convention of tools like `sudo`, `--` is used to delimit the end of `scrim` options; subsequent options and arguments are passed to the command.
 - **Error Handling**: Exits with non-zero status and an error message if `<TOOL>` is omitted, if invalid flags are passed to `scrim`, or if tool resolution/execution fails.
+
+#### Which Command (`scrim which <TOOL>`)
+
+The `scrim which` command outputs the precise absolute path of the binary that would be executed for a given tool according to the [Resolution Logic](#resolution-logic), but does not execute the binary or trigger downloads.
+
+- **Arguments**: `<TOOL>` (name of the tool to look up).
+- **Behavior**: Resolves `<TOOL>` using Scrim's resolution rules and prints the target executable's absolute path to standard output without executing it or fetching missing tools.
+- **Error Handling**: Exits with non-zero status (`1`) and an attributed error message if `<TOOL>` is omitted (`[Scrim] Error: tool name argument required for which command`), if `<TOOL>` is not found in the aggregated configuration (`[Scrim] Error: Tool '<TOOL>' not found in config`), or if configuration/resolution validation fails.
+
 
 
 ### Configuration
@@ -163,7 +173,8 @@ When a command (e.g., `node`) is invoked, Scrim follows this resolution logic:
         4. Exactly one digest must be specified when fetching (digest algorithms are mutually exclusive).
         5. If a tool specifies `url` or a digest, both `url` and a digest must be present (neither can be provided without the other).
         6. `archive_path` cannot be provided if the tool doesn't resolve to a fetchable archive (i.e., no `url` or `template` is provided). If `archive_path` is omitted, Scrim defaults to `<tool_name>` at the root of the extracted directory for standard archives (`.tar.gz`, `.zip`, `.tar.xz`, etc.), and to `AppRun` at the root of the extracted directory for AppImage packages (`.AppImage`, `.appimage`).
-        7. Empty tool configurations are invalid. Every tool must specify a `system_path`, a `url` (with a digest), or a `template`.
+        7. `system_path` MUST be an absolute path. Relative paths in `system_path` are rejected with an actionable error.
+        8. Empty tool configurations are invalid. Every tool must specify a `system_path`, a `url` (with a digest), or a `template`.
 
 3.  **Execution**:
     - If the tool specifies both a `system_path` and fetch configuration (or template):

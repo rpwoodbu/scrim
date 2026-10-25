@@ -95,22 +95,12 @@ fn format_extract_error(err: &dyn std::error::Error) -> String {
     msg
 }
 
-pub fn fetch_tool(
+pub fn cached_binary_path(
     tool_name: &str,
     url: &str,
-    digest_algorithm: &str,
-    digest_value: &str,
     archive_path: Option<&str>,
     cache_dir: &Path,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let tools_dir = match cache_dir.parent() {
-        Some(p) if !p.as_os_str().is_empty() => p,
-        _ => Path::new("."),
-    };
-    let cache_key = format!("{}:{}", digest_algorithm, digest_value);
-    let url_file = tools_dir.join(format!("{}.url", cache_key));
-    
-    // Ignore query parameters when detecting archive types
     let url_path = url.split('?').next().unwrap_or(url);
     let is_tar_gz = url_path.ends_with(".tar.gz") || url_path.ends_with(".tgz");
     let is_tar_xz = url_path.ends_with(".tar.xz") || url_path.ends_with(".txz") || url_path.ends_with(".xz");
@@ -134,9 +124,38 @@ pub fn fetch_tool(
         cache_dir.join(tool_name)
     };
 
+    Ok(target_path)
+}
+
+pub fn fetch_tool(
+    tool_name: &str,
+    url: &str,
+    digest_algorithm: &str,
+    digest_value: &str,
+    archive_path: Option<&str>,
+    cache_dir: &Path,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let tools_dir = match cache_dir.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    let cache_key = format!("{}:{}", digest_algorithm, digest_value);
+    let url_file = tools_dir.join(format!("{}.url", cache_key));
+    
+    let target_path = cached_binary_path(tool_name, url, archive_path, cache_dir)?;
+
     if target_path.exists() && cached_urls_contain(&url_file, url) {
         return Ok(target_path);
     }
+
+    let url_path = url.split('?').next().unwrap_or(url);
+    let is_tar_gz = url_path.ends_with(".tar.gz") || url_path.ends_with(".tgz");
+    let is_tar_xz = url_path.ends_with(".tar.xz") || url_path.ends_with(".txz") || url_path.ends_with(".xz");
+    let is_zip = url_path.ends_with(".zip");
+    let is_appimage = url_path.ends_with(".AppImage") || url_path.ends_with(".appimage");
+    let is_archive = is_tar_gz || is_tar_xz || is_zip || is_appimage;
+
+    let default_archive_bin = if is_appimage { "AppRun" } else { tool_name };
 
     fs::create_dir_all(tools_dir)?;
 
@@ -323,6 +342,30 @@ pub fn fetch_tool(
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn test_cached_binary_path_archive_and_binary() {
+        let dir = Path::new("/cache/tools/sha256:1234");
+        // Non-archive
+        let p1 = cached_binary_path("mytool", "https://example.com/bin", None, dir).unwrap();
+        assert_eq!(p1, PathBuf::from("/cache/tools/sha256:1234/mytool"));
+
+        // Archive with custom path
+        let p2 = cached_binary_path("mytool", "https://example.com/bin.tar.gz", Some("sub/bin"), dir).unwrap();
+        assert_eq!(p2, PathBuf::from("/cache/tools/sha256:1234/sub/bin"));
+
+        // Archive with default path
+        let p3 = cached_binary_path("mytool", "https://example.com/bin.tar.gz", None, dir).unwrap();
+        assert_eq!(p3, PathBuf::from("/cache/tools/sha256:1234/mytool"));
+
+        // AppImage default path
+        let p4 = cached_binary_path("mytool", "https://example.com/pkg.AppImage", None, dir).unwrap();
+        assert_eq!(p4, PathBuf::from("/cache/tools/sha256:1234/AppRun"));
+
+        // Invalid archive paths
+        assert!(cached_binary_path("mytool", "https://example.com/bin.tar.gz", Some("/abs/path"), dir).is_err());
+        assert!(cached_binary_path("mytool", "https://example.com/bin.tar.gz", Some("sub/../bad"), dir).is_err());
+    }
 
     #[test]
     fn test_fetch_tool_success() {
