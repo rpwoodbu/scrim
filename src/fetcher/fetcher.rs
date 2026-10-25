@@ -1,10 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::fs::{self, File};
-use std::io::{self, Seek, Write};
-use flate2::read::GzDecoder;
-use tar::Archive;
-use zip::ZipArchive;
-use appimage::extract_appimage;
+use std::io::{self, Write};
+use archive::{ArchiveFormat, extract_and_prepare_archive, resolve_relative_bin_path};
 use hashing::HashingWriter;
 
 fn cached_urls_contain(url_file: &Path, url: &str) -> bool {
@@ -37,49 +34,13 @@ fn record_cached_url(url_file: &Path, url: &str) -> io::Result<()> {
     Ok(())
 }
 
-fn format_extract_error(err: &dyn std::error::Error) -> String {
-    let mut cur = err;
-    let mut msg = err.to_string();
-    while let Some(source) = cur.source() {
-        let s = source.to_string();
-        if !msg.contains(&s) {
-            msg = format!("{}: {}", msg, s);
-        }
-        cur = source;
-    }
-    msg
-}
-
 pub fn cached_binary_path(
     tool_name: &str,
     url: &str,
     archive_path: Option<&str>,
     cache_dir: &Path,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let url_path = url.split('?').next().unwrap_or(url);
-    let is_tar_gz = url_path.ends_with(".tar.gz") || url_path.ends_with(".tgz");
-    let is_tar_xz = url_path.ends_with(".tar.xz") || url_path.ends_with(".txz") || url_path.ends_with(".xz");
-    let is_zip = url_path.ends_with(".zip");
-    let is_appimage = url_path.ends_with(".AppImage") || url_path.ends_with(".appimage");
-    let is_archive = is_tar_gz || is_tar_xz || is_zip || is_appimage;
-
-    let default_archive_bin = if is_appimage { "AppRun" } else { tool_name };
-
-    let target_path = if is_archive {
-        if let Some(bin) = archive_path {
-            let bin_path = Path::new(bin);
-            if bin_path.is_absolute() || bin.contains("..") {
-                return Err(format!("Invalid archive_path: {} must be a relative path without '..'", bin).into());
-            }
-            cache_dir.join(bin)
-        } else {
-            cache_dir.join(default_archive_bin)
-        }
-    } else {
-        cache_dir.join(tool_name)
-    };
-
-    Ok(target_path)
+    Ok(cache_dir.join(resolve_relative_bin_path(tool_name, url, archive_path)?))
 }
 
 pub fn fetch_tool(
@@ -96,21 +57,15 @@ pub fn fetch_tool(
     };
     let cache_key = format!("{}:{}", digest_algorithm, digest_value);
     let url_file = tools_dir.join(format!("{}.url", cache_key));
-    
-    let target_path = cached_binary_path(tool_name, url, archive_path, cache_dir)?;
+
+    let rel_bin_path = resolve_relative_bin_path(tool_name, url, archive_path)?;
+    let target_path = cache_dir.join(&rel_bin_path);
 
     if target_path.exists() && cached_urls_contain(&url_file, url) {
         return Ok(target_path);
     }
 
-    let url_path = url.split('?').next().unwrap_or(url);
-    let is_tar_gz = url_path.ends_with(".tar.gz") || url_path.ends_with(".tgz");
-    let is_tar_xz = url_path.ends_with(".tar.xz") || url_path.ends_with(".txz") || url_path.ends_with(".xz");
-    let is_zip = url_path.ends_with(".zip");
-    let is_appimage = url_path.ends_with(".AppImage") || url_path.ends_with(".appimage");
-    let is_archive = is_tar_gz || is_tar_xz || is_zip || is_appimage;
-
-    let default_archive_bin = if is_appimage { "AppRun" } else { tool_name };
+    let archive_format = ArchiveFormat::from_url(url);
 
     fs::create_dir_all(tools_dir)?;
 
@@ -142,100 +97,20 @@ pub fn fetch_tool(
 
     hw.verify_digest(tool_name, digest_algorithm, digest_value)?;
 
-    if is_archive {
+    if let Some(format) = archive_format {
         logger::scrim_progress!("Unpacking {} archive...", tool_name);
-        
+
         // Extract to a TempDir first to ensure atomicity
         let unpack_dir = tempfile::TempDir::new_in(tools_dir)?;
-        
-        if is_tar_gz {
-            let tar_gz = temp_file.reopen()?;
-            let tar = GzDecoder::new(tar_gz);
-            let mut archive = Archive::new(tar);
-            if let Err(e) = archive.unpack(unpack_dir.path()) {
-                return Err(format!("Failed to extract tar.gz archive: {}", format_extract_error(&e)).into());
-            }
-        } else if is_tar_xz {
-            let tar_xz = temp_file.reopen()?;
-            let mut reader = std::io::BufReader::new(tar_xz);
-            let mut decompressed_tar = tempfile::tempfile_in(tools_dir)?;
-            if let Err(e) = lzma_rs::xz_decompress(&mut reader, &mut decompressed_tar) {
-                return Err(format!("Failed to extract xz archive: {}", format_extract_error(&e)).into());
-            }
-            decompressed_tar.rewind()?;
-            let mut archive = Archive::new(decompressed_tar);
-            if let Err(e) = archive.unpack(unpack_dir.path()) {
-                return Err(format!("Failed to extract tar.xz archive: {}", format_extract_error(&e)).into());
-            }
-        } else if is_zip {
-            let zip_file = temp_file.reopen()?;
-            let mut archive = match ZipArchive::new(zip_file) {
-                Ok(a) => a,
-                Err(e) => {
-                    return Err(format!("Failed to open zip archive: {}", format_extract_error(&e)).into());
-                }
-            };
-            if let Err(e) = archive.extract(unpack_dir.path()) {
-                return Err(format!("Failed to extract zip archive: {}", format_extract_error(&e)).into());
-            }
-        } else if is_appimage {
-            let appimage_file = temp_file.reopen()?;
-            if let Err(e) = extract_appimage(appimage_file, unpack_dir.path()) {
-                return Err(format!("Failed to extract AppImage: {}", e).into());
-            }
-        }
-        
-        let temp_target_path = if let Some(bin) = archive_path {
-            let bin_path = Path::new(bin);
-            if bin_path.is_absolute() || bin.contains("..") {
-                return Err(format!("Invalid archive_path: {} must be a relative path without '..'", bin).into());
-            }
-            unpack_dir.path().join(bin)
-        } else {
-            unpack_dir.path().join(default_archive_bin)
-        };
+        let archive_file = temp_file.reopen()?;
+        extract_and_prepare_archive(
+            format,
+            archive_file,
+            tools_dir,
+            unpack_dir.path(),
+            &rel_bin_path,
+        )?;
 
-        let symlink_meta = match fs::symlink_metadata(&temp_target_path) {
-            Ok(m) => m,
-            Err(_) => {
-                return Err(format!("Extracted executable not found at {}", temp_target_path.display()).into());
-            }
-        };
-
-        let resolved_target_path = if symlink_meta.file_type().is_symlink() {
-            let canon_root = unpack_dir.path().canonicalize()?;
-            let canon_target = match temp_target_path.canonicalize() {
-                Ok(p) => p,
-                Err(_) => {
-                    return Err(format!(
-                        "Extracted executable {} is a symlink outside of the extracted directory or points to a non-existent target",
-                        temp_target_path.display()
-                    )
-                    .into());
-                }
-            };
-            if !canon_target.starts_with(&canon_root) {
-                return Err(format!(
-                    "Extracted executable {} is a symlink outside of the extracted directory, which is not allowed",
-                    temp_target_path.display()
-                )
-                .into());
-            }
-            canon_target
-        } else {
-            temp_target_path.clone()
-        };
-
-        // Ensure the binary is executable BEFORE exposing it
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let metadata = fs::metadata(&resolved_target_path)?;
-            let mut perms = metadata.permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&resolved_target_path, perms)?;
-        }
-        
         // Atomically move the extracted directory into place
         if let Err(e) = fs::rename(unpack_dir.path(), &cache_dir) {
             // If the rename failed because the directory isn't empty, another process already populated the cache.
@@ -252,7 +127,7 @@ pub fn fetch_tool(
         record_cached_url(&url_file, url)?;
     } else {
         fs::create_dir_all(&cache_dir)?;
-        
+
         // Ensure the binary is executable BEFORE exposing it
         #[cfg(unix)]
         {
@@ -265,7 +140,7 @@ pub fn fetch_tool(
             perms.set_mode(0o755);
             fs::set_permissions(temp_file.path(), perms)?;
         }
-        
+
         if let Err(e) = temp_file.persist(&target_path) {
             if target_path.exists() {
                 // Someone else succeeded

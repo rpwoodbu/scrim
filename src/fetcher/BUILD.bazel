@@ -7,15 +7,11 @@ rust_library(
     edition = "2021",
     visibility = ["//src/bin:__pkg__"],
     deps = [
-        ":appimage",
+        ":archive",
         ":hashing",
         "//src/logger",
-        "@crates//:flate2",
-        "@crates//:lzma-rs",
-        "@crates//:tar",
         "@crates//:tempfile",
         "@crates//:ureq",
-        "@crates//:zip",
     ],
 )
 
@@ -24,7 +20,35 @@ rust_test(
     crate = ":fetcher",
     deps = [
         "//tests:test_helpers",
+        "@crates//:flate2",
+        "@crates//:lzma-rs",
         "@crates//:sha2",
+        "@crates//:tar",
+        "@crates//:tempfile",
+        "@crates//:zip",
+    ],
+)
+
+rust_library(
+    name = "archive",
+    srcs = ["archive.rs"],
+    crate_root = "archive.rs",
+    edition = "2021",
+    deps = [
+        ":appimage",
+        "@crates//:flate2",
+        "@crates//:lzma-rs",
+        "@crates//:tar",
+        "@crates//:tempfile",
+        "@crates//:zip",
+    ],
+)
+
+rust_test(
+    name = "archive_test",
+    crate = ":archive",
+    deps = [
+        "//tests:test_helpers",
         "@crates//:tempfile",
     ],
 )

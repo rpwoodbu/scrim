@@ -4,7 +4,7 @@ use std::fs::{self, File};
 use std::io::{self, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-fn format_extract_error(err: &dyn std::error::Error) -> String {
+pub fn format_extract_error(err: &dyn std::error::Error) -> String {
     let mut cur = err;
     let mut msg = err.to_string();
     while let Some(source) = cur.source() {
