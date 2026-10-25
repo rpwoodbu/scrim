@@ -1,32 +1,8 @@
-use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use tempfile::tempdir;
-
-fn find_scrim_bin() -> PathBuf {
-    if let Ok(runfiles_dir) = env::var("RUNFILES_DIR") {
-        let path = Path::new(&runfiles_dir).join("_main").join("src").join("bin").join("scrim");
-        if path.exists() {
-            return path;
-        }
-    }
-    // 2. Try relative to current executable
-    if let Ok(current_exe) = env::current_exe() {
-        if let Some(dir) = current_exe.parent() {
-            let path = dir.join("scrim");
-            if path.exists() {
-                return path;
-            }
-        }
-    }
-    // 3. Fallback to standard bazel-bin
-    let path = PathBuf::from("bazel-bin/src/bin/scrim");
-    if path.exists() {
-        return path;
-    }
-    panic!("Could not locate 'scrim' binary for integration test");
-}
+use test_helpers::find_scrim_bin;
 
 fn compute_sha256(path: &Path) -> String {
     let output = Command::new("sha256sum")

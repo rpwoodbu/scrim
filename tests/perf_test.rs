@@ -1,24 +1,7 @@
-use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::tempdir;
-
-fn find_scrim_bench_bin() -> PathBuf {
-    if let Ok(runfiles_dir) = env::var("RUNFILES_DIR") {
-        let path = Path::new(&runfiles_dir).join("_main").join("benches").join("scrim_bench");
-        if path.exists() { return path; }
-    }
-    if let Ok(current_exe) = env::current_exe() {
-        if let Some(dir) = current_exe.parent() {
-            let path = dir.join("scrim_bench");
-            if path.exists() { return path; }
-        }
-    }
-    let path = PathBuf::from("bazel-bin/benches/scrim_bench");
-    if path.exists() { return path; }
-    panic!("Could not locate 'scrim_bench' binary for validation");
-}
+use test_helpers::find_scrim_bench_bin;
 
 #[test]
 fn test_performance_threshold() {

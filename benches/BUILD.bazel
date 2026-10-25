@@ -2,6 +2,7 @@ load("@rules_rust//rust:defs.bzl", "rust_binary")
 
 rust_binary(
     name = "scrim_bench",
+    testonly = True,
     srcs = ["bench.rs"],
     edition = "2021",
     rustc_flags = select({
@@ -13,6 +14,7 @@ rust_binary(
     deps = [
         "//src/config",
         "//src/resolver",
+        "//tests:test_helpers",
         "@crates//:criterion",
         "@crates//:tempfile",
     ],

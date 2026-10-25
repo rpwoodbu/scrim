@@ -25,7 +25,10 @@ rust_test(
     edition = "2021",
     data = ["//benches:scrim_bench"],
     tags = ["manual"],
-    deps = ["@crates//:tempfile"],
+    deps = [
+        ":test_helpers",
+        "@crates//:tempfile",
+    ],
 )
 
 rust_library(
@@ -34,7 +37,10 @@ rust_library(
     srcs = ["test_helpers.rs"],
     crate_root = "test_helpers.rs",
     edition = "2021",
-    visibility = ["//src/fetcher:__pkg__"],
+    visibility = [
+        "//benches:__pkg__",
+        "//src/fetcher:__pkg__",
+    ],
     deps = [
         "@crates//:backhand",
     ],

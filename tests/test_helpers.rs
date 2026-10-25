@@ -1,7 +1,45 @@
 use backhand::{FilesystemCompressor, FilesystemWriter, NodeHeader, compression::Compressor};
+use std::env;
 use std::fs;
 use std::io::Cursor;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// Locates a binary target in Bazel runfiles, relative to the current test/benchmark
+/// executable, or in `bazel-bin/<pkg_rel_path>/<bin_name>`.
+pub fn find_runfile_bin(pkg_rel_path: &str, bin_name: &str) -> PathBuf {
+    if let Ok(runfiles_dir) = env::var("RUNFILES_DIR") {
+        let path = Path::new(&runfiles_dir)
+            .join("_main")
+            .join(pkg_rel_path)
+            .join(bin_name);
+        if path.exists() {
+            return path;
+        }
+    }
+    if let Ok(current_exe) = env::current_exe() {
+        if let Some(dir) = current_exe.parent() {
+            let path = dir.join(bin_name);
+            if path.exists() {
+                return path;
+            }
+        }
+    }
+    let path = PathBuf::from("bazel-bin").join(pkg_rel_path).join(bin_name);
+    if path.exists() {
+        return path;
+    }
+    panic!("Could not locate '{}' binary", bin_name);
+}
+
+/// Locates the `scrim` binary (`//src/bin:scrim`).
+pub fn find_scrim_bin() -> PathBuf {
+    find_runfile_bin("src/bin", "scrim")
+}
+
+/// Locates the `scrim_bench` binary (`//benches:scrim_bench`).
+pub fn find_scrim_bench_bin() -> PathBuf {
+    find_runfile_bin("benches", "scrim_bench")
+}
 
 /// Constructs a minimal 128-byte 64-bit little-endian ELF stub containing the
 /// Type 2 AppImage magic bytes (`AI\x02`) and a single `SHT_NULL` section header
@@ -135,5 +173,20 @@ mod tests {
         }
         assert!(found_file, "Expected usr/bin/tool in SquashFS");
         assert!(found_symlink, "Expected AppRun symlink in SquashFS");
+    }
+
+    #[test]
+    fn test_find_runfile_bin_locates_current_exe_sibling() {
+        let current_exe = env::current_exe().unwrap();
+        let exe_name = current_exe.file_name().unwrap().to_str().unwrap();
+        let found = find_runfile_bin("nonexistent/pkg", exe_name);
+        assert!(found.exists());
+        assert_eq!(found.file_name().unwrap().to_str().unwrap(), exe_name);
+    }
+
+    #[test]
+    #[should_panic(expected = "Could not locate 'nonexistent_scrim_test_bin' binary")]
+    fn test_find_runfile_bin_panics_when_missing() {
+        find_runfile_bin("nonexistent/pkg", "nonexistent_scrim_test_bin");
     }
 }
