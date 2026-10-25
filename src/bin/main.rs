@@ -1,9 +1,9 @@
 use cli::{parse_management_cli, CliCommand, CliParseResult};
 use config::Config;
-use fetcher::{cached_binary_path, fetch_tool};
+use fetcher::{cached_binary_path, fetch_tool, tool_cache_dir};
 use linker::create_links;
 use logger::scrim_error;
-use resolver::{resolve_tool, FetchResolution, Resolution};
+use resolver::{resolve_tool, Resolution};
 use telemetry::report_usage;
 use version::format_version;
 
@@ -52,7 +52,13 @@ impl AppEnvironment {
 const BINARY_COMMIT: Option<&str> = option_env!("SCRIM_GIT_COMMIT");
 
 fn load_configuration(app_env: &AppEnvironment) -> Config {
-    let cwd = env::current_dir().expect("Failed to get current directory");
+    let cwd = match env::current_dir() {
+        Ok(dir) => dir,
+        Err(e) => {
+            scrim_error!("Failed to get current directory: {}", e);
+            std::process::exit(1);
+        }
+    };
     match config::load_config(
         &cwd,
         app_env.home_dir.as_deref(),
@@ -125,72 +131,43 @@ fn proxy_command(program_name: &str, args: &[std::ffi::OsString], app_env: &AppE
 
 fn execute_tool(program_name: &str, tool_args: &[std::ffi::OsString], app_env: &AppEnvironment) -> ! {
     let config = load_configuration(app_env);
-    let resolution = resolve_tool(program_name, Some(&config));
+    let target_path = resolve_target_binary_path(program_name, &config, app_env, true);
 
-    match resolution {
-        Ok(Some(res)) => {
-            let target_path = match res {
-                Resolution::SystemPath { path, fallback } => {
-                    if path.exists() || fallback.is_none() {
-                        path
-                    } else {
-                        execute_fetch(program_name, &fallback.unwrap(), app_env)
-                    }
-                }
-                Resolution::Fetch(fetch_res) => execute_fetch(program_name, &fetch_res, app_env),
-            };
+    // Prepare the command
+    let mut cmd = Command::new(&target_path);
 
-            // Prepare the command
-            let mut cmd = Command::new(&target_path);
-
-            // Pass through all arguments
-            if !tool_args.is_empty() {
-                cmd.args(tool_args);
-            }
-
-            // Report usage in the background (non-blocking) if enabled in config
-            if config.telemetry_enabled() {
-                report_usage(program_name, &target_path);
-            }
-
-            // Replace the current process with the target tool
-            let err = cmd.exec();
-
-            // If exec returns, it failed
-            scrim_error!("Failed to execute tool: {}", err);
-            std::process::exit(1);
-        }
-        Ok(None) => {
-            scrim_error!("Tool '{}' not found in config", program_name);
-            std::process::exit(1);
-        }
-        Err(e) => {
-            scrim_error!("{}", e);
-            std::process::exit(1);
-        }
+    // Pass through all arguments
+    if !tool_args.is_empty() {
+        cmd.args(tool_args);
     }
+
+    // Report usage in the background (non-blocking) if enabled in config
+    if config.telemetry_enabled() {
+        report_usage(program_name, &target_path);
+    }
+
+    // Replace the current process with the target tool
+    let err = cmd.exec();
+
+    // If exec returns, it failed
+    scrim_error!("Failed to execute tool: {}", err);
+    std::process::exit(1);
 }
 
 fn which_tool(program_name: &str, app_env: &AppEnvironment) {
     let config = load_configuration(app_env);
-    let resolution = resolve_tool(program_name, Some(&config));
+    let target_path = resolve_target_binary_path(program_name, &config, app_env, false);
+    println!("{}", target_path.display());
+}
 
-    match resolution {
-        Ok(Some(res)) => {
-            let target_path = match res {
-                Resolution::SystemPath { path, fallback } => {
-                    if path.exists() || fallback.is_none() {
-                        path
-                    } else {
-                        resolve_fetch_path(program_name, &fallback.unwrap(), app_env)
-                    }
-                }
-                Resolution::Fetch(fetch_res) => {
-                    resolve_fetch_path(program_name, &fetch_res, app_env)
-                }
-            };
-            println!("{}", target_path.display());
-        }
+fn resolve_target_binary_path(
+    program_name: &str,
+    config: &Config,
+    app_env: &AppEnvironment,
+    fetch_if_missing: bool,
+) -> PathBuf {
+    let resolution = match resolve_tool(program_name, config) {
+        Ok(Some(res)) => res,
         Ok(None) => {
             scrim_error!("Tool '{}' not found in config", program_name);
             std::process::exit(1);
@@ -199,55 +176,55 @@ fn which_tool(program_name: &str, app_env: &AppEnvironment) {
             scrim_error!("{}", e);
             std::process::exit(1);
         }
-    }
-}
+    };
 
-fn resolve_fetch_path(
-    program_name: &str,
-    fetch: &FetchResolution,
-    app_env: &AppEnvironment,
-) -> PathBuf {
-    let base_cache = config::resolve_cache_dir(
-        app_env.xdg_cache_home.as_deref(),
-        app_env.home_dir.as_deref(),
-    );
-    let tools_dir = base_cache.join("tools");
-    let cache_dir_name = format!("{}:{}", fetch.digest.algorithm.name(), fetch.digest.value);
-    let cache_dir = tools_dir.join(cache_dir_name);
-    match cached_binary_path(
-        program_name,
-        &fetch.url,
-        fetch.archive_path.as_deref(),
-        &cache_dir,
-    ) {
-        Ok(p) => p,
-        Err(e) => {
-            scrim_error!("{}", e);
-            std::process::exit(1);
+    let fetch_res = match resolution {
+        Resolution::SystemPath { path, fallback } => {
+            if path.exists() || fallback.is_none() {
+                return path;
+            }
+            fallback.unwrap()
         }
-    }
-}
+        Resolution::Fetch(fetch_res) => fetch_res,
+    };
 
-fn execute_fetch(program_name: &str, fetch: &FetchResolution, app_env: &AppEnvironment) -> PathBuf {
     let base_cache = config::resolve_cache_dir(
         app_env.xdg_cache_home.as_deref(),
         app_env.home_dir.as_deref(),
     );
-    let tools_dir = base_cache.join("tools");
-    let cache_dir_name = format!("{}:{}", fetch.digest.algorithm.name(), fetch.digest.value);
-    let cache_dir = tools_dir.join(cache_dir_name);
-    match fetch_tool(
-        program_name,
-        &fetch.url,
-        fetch.digest.algorithm.name(),
-        &fetch.digest.value,
-        fetch.archive_path.as_deref(),
-        &cache_dir,
-    ) {
-        Ok(p) => p,
-        Err(e) => {
-            scrim_error!("Failed to fetch tool '{}': {}", program_name, e);
-            std::process::exit(1);
+    let cache_dir = tool_cache_dir(
+        &base_cache,
+        fetch_res.digest.algorithm.name(),
+        &fetch_res.digest.value,
+    );
+
+    if fetch_if_missing {
+        match fetch_tool(
+            program_name,
+            &fetch_res.url,
+            fetch_res.digest.algorithm.name(),
+            &fetch_res.digest.value,
+            fetch_res.archive_path.as_deref(),
+            &cache_dir,
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                scrim_error!("Failed to fetch tool '{}': {}", program_name, e);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        match cached_binary_path(
+            program_name,
+            &fetch_res.url,
+            fetch_res.archive_path.as_deref(),
+            &cache_dir,
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                scrim_error!("{}", e);
+                std::process::exit(1);
+            }
         }
     }
 }

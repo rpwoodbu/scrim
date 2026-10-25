@@ -34,6 +34,12 @@ fn record_cached_url(url_file: &Path, url: &str) -> io::Result<()> {
     Ok(())
 }
 
+pub fn tool_cache_dir(base_cache_dir: &Path, digest_algorithm: &str, digest_value: &str) -> PathBuf {
+    base_cache_dir
+        .join("tools")
+        .join(format!("{}:{}", digest_algorithm, digest_value))
+}
+
 pub fn cached_binary_path(
     tool_name: &str,
     url: &str,
@@ -159,6 +165,19 @@ mod tests {
     use super::*;
     use sha2::{Digest, Sha256, Sha512};
     use tempfile::tempdir;
+
+    #[test]
+    fn test_tool_cache_dir() {
+        let base = Path::new("/home/user/.cache/scrim");
+        assert_eq!(
+            tool_cache_dir(base, "sha256", "abc12345"),
+            PathBuf::from("/home/user/.cache/scrim/tools/sha256:abc12345")
+        );
+        assert_eq!(
+            tool_cache_dir(base, "sha512", "def67890"),
+            PathBuf::from("/home/user/.cache/scrim/tools/sha512:def67890")
+        );
+    }
 
     #[test]
     fn test_cached_binary_path_archive_and_binary() {

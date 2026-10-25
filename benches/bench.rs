@@ -71,7 +71,7 @@ tools:
         b.iter(|| {
             resolver::resolve_tool(
                 black_box("node"),
-                black_box(Some(&config)),
+                black_box(&config),
             )
         })
     });

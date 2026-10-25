@@ -38,107 +38,105 @@ pub enum Resolution {
     Fetch(FetchResolution),
 }
 
-pub fn resolve_tool(program_name: &str, config: Option<&Config>) -> Result<Option<Resolution>, String> {
-    if let Some(config) = config {
-        if let Some(tool_config) = config.tools.get(program_name) {
-            let has_system_path = tool_config.system_path.is_some();
-            let has_url = tool_config.url.is_some();
-            let has_sha256 = tool_config.sha256.is_some();
-            let has_sha512 = tool_config.sha512.is_some();
-            let has_digest = has_sha256 || has_sha512;
-            let has_template = tool_config.template.is_some();
-            let has_archive_path = tool_config.archive_path.is_some();
+pub fn resolve_tool(program_name: &str, config: &Config) -> Result<Option<Resolution>, String> {
+    if let Some(tool_config) = config.tools.get(program_name) {
+        let has_system_path = tool_config.system_path.is_some();
+        let has_url = tool_config.url.is_some();
+        let has_sha256 = tool_config.sha256.is_some();
+        let has_sha512 = tool_config.sha512.is_some();
+        let has_digest = has_sha256 || has_sha512;
+        let has_template = tool_config.template.is_some();
+        let has_archive_path = tool_config.archive_path.is_some();
 
-            // Rule 2: `template` is mutually exclusive with `url` and digests
-            if has_template && (has_url || has_digest) {
-                return Err(format!("Tool '{}' specifies 'template' which is mutually exclusive with 'url' and digests.", program_name));
+        // Rule 2: `template` is mutually exclusive with `url` and digests
+        if has_template && (has_url || has_digest) {
+            return Err(format!("Tool '{}' specifies 'template' which is mutually exclusive with 'url' and digests.", program_name));
+        }
+
+        // Rule 3: digests are mutually exclusive
+        if has_sha256 && has_sha512 {
+            return Err(format!("Tool '{}' specifies multiple digests. Exactly one digest algorithm must be specified.", program_name));
+        }
+
+        // Rule 4: `url` and digest must both be present or both absent
+        if has_url != has_digest {
+            if has_url {
+                return Err(format!("Tool '{}' specifies 'url' without a digest. Both must be provided together.", program_name));
+            } else {
+                let digest_name = if has_sha256 { "sha256" } else { "sha512" };
+                return Err(format!("Tool '{}' specifies '{}' without 'url'. Both must be provided together.", program_name, digest_name));
             }
+        }
 
-            // Rule 3: digests are mutually exclusive
-            if has_sha256 && has_sha512 {
-                return Err(format!("Tool '{}' specifies multiple digests. Exactly one digest algorithm must be specified.", program_name));
+        // Rule 5: `archive_path` requires `url` or `template`
+        if has_archive_path && !has_url && !has_template {
+            return Err(format!("Tool '{}' specifies 'archive_path' but provides no 'url' or 'template'.", program_name));
+        }
+
+        // Rule 6: `system_path` must be an absolute path
+        if let Some(path) = &tool_config.system_path {
+            if !std::path::Path::new(path).is_absolute() {
+                return Err(format!("Tool '{}' specifies relative system_path '{}'. 'system_path' must be an absolute path.", program_name, path));
             }
+        }
 
-            // Rule 4: `url` and digest must both be present or both absent
-            if has_url != has_digest {
-                if has_url {
-                    return Err(format!("Tool '{}' specifies 'url' without a digest. Both must be provided together.", program_name));
+        // Rule 7: Empty tool configurations are invalid
+        if !has_system_path && !has_url && !has_template {
+            return Err(format!("Tool '{}' has an empty configuration. Every tool must specify a 'system_path', 'url', or 'template'.", program_name));
+        }
+
+        // If only system_path is specified, resolve to SystemPath with no fallback
+        if let (Some(path), false) = (&tool_config.system_path, has_url || has_template) {
+            return Ok(Some(Resolution::SystemPath {
+                path: PathBuf::from(path),
+                fallback: None,
+            }));
+        }
+
+        let mut resolved_url = tool_config.url.clone();
+        let mut resolved_digest = if let Some(v) = &tool_config.sha256 {
+            Some(Digest { algorithm: DigestAlgorithm::Sha256, value: v.clone() })
+        } else if let Some(v) = &tool_config.sha512 {
+            Some(Digest { algorithm: DigestAlgorithm::Sha512, value: v.clone() })
+        } else {
+            None
+        };
+
+        if let Some(template_name) = &tool_config.template {
+            if let Some(template_config) = config.tools.get(template_name) {
+                if template_config.template.is_none() {
+                    resolved_url = template_config.url.clone();
+                    resolved_digest = if let Some(v) = &template_config.sha256 {
+                        Some(Digest { algorithm: DigestAlgorithm::Sha256, value: v.clone() })
+                    } else if let Some(v) = &template_config.sha512 {
+                        Some(Digest { algorithm: DigestAlgorithm::Sha512, value: v.clone() })
+                    } else {
+                        None
+                    };
                 } else {
-                    let digest_name = if has_sha256 { "sha256" } else { "sha512" };
-                    return Err(format!("Tool '{}' specifies '{}' without 'url'. Both must be provided together.", program_name, digest_name));
+                    return Err(format!("Tool '{}' references template '{}', which is also a template. Template chaining is not allowed.", program_name, template_name));
                 }
+            } else {
+                return Err(format!("Tool '{}' references template '{}', which was not found.", program_name, template_name));
             }
+        }
 
-            // Rule 5: `archive_path` requires `url` or `template`
-            if has_archive_path && !has_url && !has_template {
-                return Err(format!("Tool '{}' specifies 'archive_path' but provides no 'url' or 'template'.", program_name));
-            }
-
-            // Rule 6: `system_path` must be an absolute path
+        if let (Some(url), Some(digest)) = (resolved_url, resolved_digest) {
+            let fetch = FetchResolution {
+                url,
+                digest,
+                archive_path: tool_config.archive_path.clone(),
+            };
             if let Some(path) = &tool_config.system_path {
-                if !std::path::Path::new(path).is_absolute() {
-                    return Err(format!("Tool '{}' specifies relative system_path '{}'. 'system_path' must be an absolute path.", program_name, path));
-                }
-            }
-
-            // Rule 7: Empty tool configurations are invalid
-            if !has_system_path && !has_url && !has_template {
-                return Err(format!("Tool '{}' has an empty configuration. Every tool must specify a 'system_path', 'url', or 'template'.", program_name));
-            }
-
-            // If only system_path is specified, resolve to SystemPath with no fallback
-            if let (Some(path), false) = (&tool_config.system_path, has_url || has_template) {
                 return Ok(Some(Resolution::SystemPath {
                     path: PathBuf::from(path),
-                    fallback: None,
+                    fallback: Some(fetch),
                 }));
-            }
-
-            let mut resolved_url = tool_config.url.clone();
-            let mut resolved_digest = if let Some(v) = &tool_config.sha256 {
-                Some(Digest { algorithm: DigestAlgorithm::Sha256, value: v.clone() })
-            } else if let Some(v) = &tool_config.sha512 {
-                Some(Digest { algorithm: DigestAlgorithm::Sha512, value: v.clone() })
             } else {
-                None
-            };
-
-            if let Some(template_name) = &tool_config.template {
-                if let Some(template_config) = config.tools.get(template_name) {
-                    if template_config.template.is_none() {
-                        resolved_url = template_config.url.clone();
-                        resolved_digest = if let Some(v) = &template_config.sha256 {
-                            Some(Digest { algorithm: DigestAlgorithm::Sha256, value: v.clone() })
-                        } else if let Some(v) = &template_config.sha512 {
-                            Some(Digest { algorithm: DigestAlgorithm::Sha512, value: v.clone() })
-                        } else {
-                            None
-                        };
-                    } else {
-                        return Err(format!("Tool '{}' references template '{}', which is also a template. Template chaining is not allowed.", program_name, template_name));
-                    }
-                } else {
-                    return Err(format!("Tool '{}' references template '{}', which was not found.", program_name, template_name));
-                }
+                return Ok(Some(Resolution::Fetch(fetch)));
             }
-
-            if let (Some(url), Some(digest)) = (resolved_url, resolved_digest) {
-                let fetch = FetchResolution {
-                    url,
-                    digest,
-                    archive_path: tool_config.archive_path.clone(),
-                };
-                if let Some(path) = &tool_config.system_path {
-                    return Ok(Some(Resolution::SystemPath {
-                        path: PathBuf::from(path),
-                        fallback: Some(fetch),
-                    }));
-                } else {
-                    return Ok(Some(Resolution::Fetch(fetch)));
-                }
-            } else if has_archive_path {
-                return Err(format!("Tool '{}' specifies 'archive_path' but the referenced template does not provide a fetchable archive.", program_name));
-            }
+        } else if has_archive_path {
+            return Err(format!("Tool '{}' specifies 'archive_path' but the referenced template does not provide a fetchable archive.", program_name));
         }
     }
 
@@ -168,7 +166,7 @@ mod tests {
             ..Default::default()
         };
 
-        let resolved = resolve_tool("node", Some(&config));
+        let resolved = resolve_tool("node", &config);
         assert_eq!(resolved, Ok(Some(Resolution::SystemPath {
             path: PathBuf::from("/usr/bin/node"),
             fallback: None,
@@ -188,7 +186,7 @@ mod tests {
         });
         let config = Config { tools, telemetry: Some(true), ..Default::default() };
 
-        let resolved = resolve_tool("go", Some(&config));
+        let resolved = resolve_tool("go", &config);
         assert_eq!(resolved, Ok(Some(Resolution::Fetch(FetchResolution { 
             url: "https://go.dev/dl/go.tar.gz".to_string(),
             digest: Digest { algorithm: DigestAlgorithm::Sha256, value: "abc12345".to_string() },
@@ -209,7 +207,7 @@ mod tests {
         });
         let config = Config { tools, telemetry: Some(true), ..Default::default() };
 
-        let resolved = resolve_tool("go", Some(&config));
+        let resolved = resolve_tool("go", &config);
         assert_eq!(resolved, Ok(Some(Resolution::Fetch(FetchResolution { 
             url: "https://go.dev/dl/go.tar.gz".to_string(),
             digest: Digest { algorithm: DigestAlgorithm::Sha512, value: "def67890".to_string() },
@@ -238,7 +236,7 @@ mod tests {
         });
         let config = Config { tools, telemetry: Some(true), ..Default::default() };
 
-        let resolved = resolve_tool("gofmt", Some(&config));
+        let resolved = resolve_tool("gofmt", &config);
         assert_eq!(resolved, Ok(Some(Resolution::Fetch(FetchResolution { 
             url: "https://go.dev/dl/go.tar.gz".to_string(),
             digest: Digest { algorithm: DigestAlgorithm::Sha256, value: "abc12345".to_string() },
@@ -275,7 +273,7 @@ mod tests {
         });
         let config = Config { tools, telemetry: Some(true), ..Default::default() };
 
-        let resolved = resolve_tool("go-chained", Some(&config));
+        let resolved = resolve_tool("go-chained", &config);
         assert_eq!(resolved, Err("Tool 'go-chained' references template 'gofmt', which is also a template. Template chaining is not allowed.".to_string()));
     }
 
@@ -357,31 +355,31 @@ mod tests {
         let config = Config { tools, telemetry: Some(true), ..Default::default() };
 
         assert_eq!(
-            resolve_tool("err_path_missing_digest", Some(&config)),
+            resolve_tool("err_path_missing_digest", &config),
             Err("Tool 'err_path_missing_digest' specifies 'url' without a digest. Both must be provided together.".to_string())
         );
         assert_eq!(
-            resolve_tool("err_template", Some(&config)),
+            resolve_tool("err_template", &config),
             Err("Tool 'err_template' specifies 'template' which is mutually exclusive with 'url' and digests.".to_string())
         );
         assert_eq!(
-            resolve_tool("err_sha", Some(&config)),
+            resolve_tool("err_sha", &config),
             Err("Tool 'err_sha' specifies 'url' without a digest. Both must be provided together.".to_string())
         );
         assert_eq!(
-            resolve_tool("err_multi_digest", Some(&config)),
+            resolve_tool("err_multi_digest", &config),
             Err("Tool 'err_multi_digest' specifies multiple digests. Exactly one digest algorithm must be specified.".to_string())
         );
         assert_eq!(
-            resolve_tool("err_digest_no_url", Some(&config)),
+            resolve_tool("err_digest_no_url", &config),
             Err("Tool 'err_digest_no_url' specifies 'sha512' without 'url'. Both must be provided together.".to_string())
         );
         assert_eq!(
-            resolve_tool("err_archive", Some(&config)),
+            resolve_tool("err_archive", &config),
             Err("Tool 'err_archive' specifies 'archive_path' but provides no 'url' or 'template'.".to_string())
         );
         assert_eq!(
-            resolve_tool("err_archive_template", Some(&config)),
+            resolve_tool("err_archive_template", &config),
             Err("Tool 'err_archive_template' specifies 'archive_path' but the referenced template does not provide a fetchable archive.".to_string())
         );
 
@@ -396,7 +394,7 @@ mod tests {
         });
         let config_rel = Config { tools: tools2, telemetry: Some(true), ..Default::default() };
         assert_eq!(
-            resolve_tool("rel_path_tool", Some(&config_rel)),
+            resolve_tool("rel_path_tool", &config_rel),
             Err("Tool 'rel_path_tool' specifies relative system_path './bin/relative'. 'system_path' must be an absolute path.".to_string())
         );
 
@@ -412,7 +410,7 @@ mod tests {
         let config2 = Config { tools: tools3, telemetry: Some(true), ..Default::default() };
         
         assert_eq!(
-            resolve_tool("empty_tool", Some(&config2)),
+            resolve_tool("empty_tool", &config2),
             Err("Tool 'empty_tool' has an empty configuration. Every tool must specify a 'system_path', 'url', or 'template'.".to_string())
         );
     }
@@ -452,7 +450,7 @@ mod tests {
 
         // Verification 1: Both defined -> SystemPath with fallback
         assert_eq!(
-            resolve_tool("tool_with_fallback", Some(&config)),
+            resolve_tool("tool_with_fallback", &config),
             Ok(Some(Resolution::SystemPath {
                 path: PathBuf::from("/bin/custom_tool"),
                 fallback: Some(FetchResolution {
@@ -468,7 +466,7 @@ mod tests {
 
         // Verification 2: System path with template -> SystemPath with fallback
         assert_eq!(
-            resolve_tool("tool_template_fallback", Some(&config)),
+            resolve_tool("tool_template_fallback", &config),
             Ok(Some(Resolution::SystemPath {
                 path: PathBuf::from("/bin/subtool"),
                 fallback: Some(FetchResolution {
