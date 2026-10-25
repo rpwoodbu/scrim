@@ -12,6 +12,7 @@ rust_library(
         "//benches:__pkg__",
     ],
     deps = [
+        ":platform",
         "@crates//:serde",
         "@crates//:serde_with",
         "@crates//:serde_yaml",
@@ -24,4 +25,19 @@ rust_test(
     deps = [
         "@crates//:tempfile",
     ],
+)
+
+rust_library(
+    name = "platform",
+    srcs = ["platform.rs"],
+    crate_root = "platform.rs",
+    edition = "2021",
+    deps = [
+        "@crates//:serde",
+    ],
+)
+
+rust_test(
+    name = "platform_test",
+    crate = ":platform",
 )

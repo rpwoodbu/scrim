@@ -66,7 +66,7 @@ fn load_configuration(app_env: &AppEnvironment) -> Config {
     ) {
         Ok(c) => c,
         Err(e) => {
-            scrim_error!("Failed to load configuration: {}", e);
+            scrim_error!("{}", e);
             std::process::exit(1);
         }
     }

@@ -22,6 +22,7 @@ fn bench_config_resolution(c: &mut Criterion) {
 fn bench_config_parsing(c: &mut Criterion) {
     let yaml = r#"
 telemetry: true
+default_platform: linux-x86_64
 tools:
   node:
     system_path: /usr/local/bin/node
@@ -41,6 +42,7 @@ tools:
 fn bench_resolver(c: &mut Criterion) {
     let yaml = r#"
 telemetry: true
+default_platform: linux-x86_64
 tools:
   node:
     system_path: /usr/local/bin/node
@@ -68,6 +70,7 @@ fn bench_e2e_shim(c: &mut Criterion) {
     let scrim_yaml = dir.path().join("scrim.yaml");
     let config_content = r#"
 telemetry: false
+default_platform: linux-x86_64
 tools:
   true:
     system_path: /bin/true

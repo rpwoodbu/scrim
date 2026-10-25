@@ -52,6 +52,8 @@ fn test_e2e_symlink_and_fetch() {
     let config_content = format!(
         r#"
 telemetry: false
+default_platform: linux-x86_64
+
 tools:
   demotool:
     url: "file://{}"
@@ -158,6 +160,8 @@ fn test_e2e_local_path_resolution() {
     let config_content = format!(
         r#"
 telemetry: false
+default_platform: linux-x86_64
+
 tools:
   node:
     system_path: "{}"
@@ -210,6 +214,8 @@ fn test_e2e_telemetry_logging() {
     let config_content = format!(
         r#"
 telemetry: true
+default_platform: linux-x86_64
+
 tools:
   node:
     system_path: "{}"
@@ -295,6 +301,8 @@ fn test_e2e_telemetry_disabled_by_default() {
     let scrim_yaml = temp_path.join("scrim.yaml");
     let config_content = format!(
         r#"
+default_platform: linux-x86_64
+
 tools:
   node:
     system_path: "{}"
@@ -378,6 +386,8 @@ fn test_e2e_http_download() {
     let config_content = format!(
         r#"
 telemetry: false
+default_platform: linux-x86_64
+
 tools:
   demotool:
     url: "{}"
@@ -482,6 +492,8 @@ fn test_e2e_http_ipv6_download() {
     let config_content = format!(
         r#"
 telemetry: false
+default_platform: linux-x86_64
+
 tools:
   demotool_ipv6:
     url: "{}"
@@ -578,6 +590,8 @@ fn test_e2e_unpack_output() {
     let config_content = format!(
         r#"
 telemetry: false
+default_platform: linux-x86_64
+
 tools:
   demotool:
     url: "file://{}"
@@ -656,6 +670,8 @@ fn test_e2e_tar_xz_unpack_output() {
     let config_content = format!(
         r#"
 telemetry: false
+default_platform: linux-x86_64
+
 tools:
   demotool:
     url: "file://{}"
@@ -704,6 +720,8 @@ fn test_e2e_error_attribution() {
     // 1. Create an invalid scrim.yaml
     let scrim_yaml = temp_path.join("scrim.yaml");
     let config_content = r#"
+default_platform: linux-x86_64
+
 tools:
   badtool:
     system_path: /bin/ls
@@ -803,6 +821,8 @@ fn test_e2e_management_cli() {
     // 4. Run with 'config'
     let scrim_yaml = temp_path.join("scrim.yaml");
     let config_content = r#"telemetry: false
+default_platform: linux-x86_64
+
 tools:
   demotool:
     system_path: /bin/echo"#;
@@ -884,6 +904,8 @@ tools:
 
     // 4.6 Run with 'config' on multiple tools to verify output is sorted by tool name
     let sorted_test_config = r#"telemetry: true
+default_platform: linux-x86_64
+
 tools:
   zebra:
     system_path: /bin/echo
@@ -985,6 +1007,8 @@ fn test_e2e_links_command() {
     let scrim_yaml = temp_path.join("scrim.yaml");
     let config_content = format!(
         r#"
+default_platform: linux-x86_64
+
 tools:
   tool1:
     system_path: "{}"
@@ -1054,6 +1078,8 @@ tools:
     // 7. Add tools with conflicts (one regular file, one symlink pointing elsewhere, one valid new tool)
     let config_conflicts = format!(
         r#"
+default_platform: linux-x86_64
+
 tools:
   tool1:
     system_path: "{}"
@@ -1148,6 +1174,8 @@ fn test_e2e_links_dry_run() {
     let scrim_yaml = temp_path.join("scrim.yaml");
     let config_content = format!(
         r#"
+default_platform: linux-x86_64
+
 tools:
   tool1:
     system_path: "{}"
@@ -1221,6 +1249,8 @@ tools:
     // 8. Run `scrim links -n <target_bin>` with conflict -> exit code 1
     let config_conflicts = format!(
         r#"
+default_platform: linux-x86_64
+
 tools:
   tool1:
     system_path: "{}"
@@ -1306,6 +1336,8 @@ fn test_e2e_run_command() {
     let config_content = format!(
         r#"
 telemetry: false
+default_platform: linux-x86_64
+
 tools:
   mytool:
     system_path: "{}"
@@ -1455,6 +1487,8 @@ tools:
     let config_fetch = format!(
         r#"
 telemetry: false
+default_platform: linux-x86_64
+
 tools:
   fetched_tool:
     url: "file://{}"
@@ -1511,6 +1545,8 @@ fn test_e2e_url_aware_cache_invalidation_and_update_facilitation() {
     let config_v1 = format!(
         r#"
 telemetry: false
+default_platform: linux-x86_64
+
 tools:
   mytool:
     url: "{}"
@@ -1573,6 +1609,8 @@ tools:
     let config_v2_stale_hash = format!(
         r#"
 telemetry: false
+default_platform: linux-x86_64
+
 tools:
   mytool:
     url: "{}"
@@ -1605,6 +1643,8 @@ tools:
     let config_v2_correct = format!(
         r#"
 telemetry: false
+default_platform: linux-x86_64
+
 tools:
   mytool:
     url: "{}"
@@ -1640,6 +1680,8 @@ fn test_e2e_config_tool_argument() {
 
     let scrim_yaml = temp_path.join("scrim.yaml");
     let config_content = r#"telemetry: true
+default_platform: linux-x86_64
+
 tools:
   node:
     system_path: /bin/node
@@ -1754,7 +1796,7 @@ fn test_e2e_xdg_base_directory_config_and_cache() {
     fs::write(
         custom_scrim_dir.join("scrim.yaml"),
         format!(
-            "telemetry: false\ntools:\n  mytool:\n    url: \"{}\"\n    sha256: \"{}\"\n",
+            "default_platform: linux-x86_64\ntelemetry: false\ntools:\n  mytool:\n    url: \"{}\"\n    sha256: \"{}\"\n",
             tool_url, sha256
         ),
     )
@@ -1810,7 +1852,7 @@ fn test_e2e_xdg_cache_home_fallback() {
     fs::write(
         &scrim_yaml,
         format!(
-            "telemetry: false\ntools:\n  mytool:\n    url: \"{}\"\n    sha256: \"{}\"\n",
+            "default_platform: linux-x86_64\ntelemetry: false\ntools:\n  mytool:\n    url: \"{}\"\n    sha256: \"{}\"\n",
             tool_url, sha256
         ),
     )
@@ -1880,6 +1922,8 @@ fn test_e2e_fetch_with_sha512() {
     let config_content = format!(
         r#"
 telemetry: false
+default_platform: linux-x86_64
+
 tools:
   demotool512:
     url: "file://{}"
@@ -1934,6 +1978,8 @@ fn test_e2e_digest_validation_errors() {
         &scrim_yaml,
         r#"
 telemetry: false
+default_platform: linux-x86_64
+
 tools:
   multi_digest:
     url: "https://example.com/tool.tar.gz"
@@ -1989,6 +2035,8 @@ fn test_e2e_appimage_unpack_and_execute() {
     let config_content = format!(
         r#"
 telemetry: false
+default_platform: linux-x86_64
+
 tools:
   demotool:
     url: "file://{}"
@@ -2060,6 +2108,8 @@ fn test_e2e_config_imports_with_precedence_and_cli() {
     fs::write(
         &base_yaml,
         r#"
+default_platform: linux-x86_64
+
 tools:
   node:
     system_path: /bin/base_node
@@ -2076,6 +2126,8 @@ tools:
     fs::write(
         &override_yaml,
         r#"
+default_platform: linux-x86_64
+
 tools:
   python:
     system_path: /bin/override_python
@@ -2095,6 +2147,8 @@ imports:
     precedence: after
   - path: optional-missing.yaml
     optional: true
+default_platform: linux-x86_64
+
 tools:
   node:
     system_path: /bin/root_node
@@ -2214,6 +2268,8 @@ fn test_e2e_system_path_fallback_to_url() {
     let config_content = format!(
         r#"
 telemetry: false
+default_platform: linux-x86_64
+
 tools:
   tool_exists:
     system_path: "{}"
@@ -2278,6 +2334,8 @@ fn test_scrim_which_command() {
     let config_content = format!(
         r#"
 telemetry: false
+default_platform: linux-x86_64
+
 tools:
   sys_tool:
     system_path: "{}"
@@ -2447,7 +2505,7 @@ tools:
     fs::create_dir_all(&rel_config).unwrap();
     fs::write(
         rel_config.join("scrim.yaml"),
-        "tools:\n  rel_tool:\n    system_path: ./rel/path\n",
+        "default_platform: linux-x86_64\ntools:\n  rel_tool:\n    system_path: ./rel/path\n",
     ).unwrap();
     let out = Command::new(&scrim_bin)
         .args(["which", "rel_tool"])
