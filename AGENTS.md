@@ -8,12 +8,13 @@ When participating in a design discussion, you MUST first propose changes to `DE
 
 ### Repository Hygiene
 Keep the history clean. Follow these rules to achieve this:
-* Commits MUST be complete, including any test or documentation changes relevant to the change. You MUST NOT commit code without ensuring its behavior is tested.
-* When modifying dependencies (e.g., `MODULE.bazel`), you MUST run a build/test and include any resulting lockfile updates (e.g., `MODULE.bazel.lock`) in the same commit.
+* Commits on `main` MUST be complete, including any test or documentation changes relevant to the change. You MUST NOT commit code to `main` without ensuring its behavior is tested.
 * Yet commits should be small and targeted. Separate concerns deserve separate commits.
-* All tests MUST pass on each commit.
-* It is appropriate to amend unpushed commits to incorporate fixes that should have been included originally.
+* All tests MUST pass on each commit on `main`.
 * Commit messages MUST be descriptive and clearly explain the 'why' and 'how' of the change.
+* When modifying dependencies (e.g., `MODULE.bazel`), you MUST run a build/test and include any resulting lockfile updates (e.g., `MODULE.bazel.lock`) in the same commit.
+* It is appropriate to amend unpushed commits to incorporate fixes that should have been included originally.
+* Prefer to use topic branches for non-trivial changes. The rules of `main` do not apply. Incremental commits are encouraged regardless of completeness or tests passing. When finally preparing to merge to `main`, squash commits as needed to ensure the history is clean. Double-check that tests pass on each squashed commit before merging to `main`.
 
 ### Bazel
 Bazel builds are hermetic and fully specified. The local environment may not contain toolchains. Do not expect, e.g., `rustc` to be in the `PATH`. Keep the build hermetic.
