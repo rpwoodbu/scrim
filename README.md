@@ -49,6 +49,8 @@ tools:
   node:
     system_path: /bin/node
   go:
+    # Uses system_path if it exists on disk; falls back to fetching via url if absent
+    system_path: /usr/local/go/bin/go
     url: https://go.dev/dl/go1.21.5.linux-amd64.tar.gz
     sha256: 285c1f0624022839446d32839446d32839446d32839446d32839446d32839446
     archive_path: go/bin/go
@@ -63,7 +65,7 @@ tools:
     archive_path: usr/bin/xxd
 ```
 
-For fetched archives, `archive_path` defaults to `<tool_name>` at the root of the archive if omitted, or to `AppRun` for `.AppImage` / `.appimage` packages.
+For fetched archives, `archive_path` defaults to `<tool_name>` at the root of the archive if omitted, or to `AppRun` for `.AppImage` / `.appimage` packages. Tools can also configure both `system_path` and fetch properties (`url` or `template`), in which case Scrim checks at execution time whether the local executable at `system_path` exists on disk; if present, it is executed directly, and if absent, Scrim falls back to downloading and caching the tool from the network.
 
 ### Configuration Imports
 

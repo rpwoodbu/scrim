@@ -107,6 +107,8 @@ tools:
   node:
     system_path: /bin/node
   go:
+    # Uses system_path if it exists on disk; falls back to fetching via url if absent
+    system_path: /usr/local/go/bin/go
     url: https://go.dev/dl/go1.21.5.linux-amd64.tar.gz
     sha256: 285c1f0624022839446d32
     archive_path: go/bin/go
