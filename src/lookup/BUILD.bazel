@@ -1,0 +1,17 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+rust_library(
+    name = "lookup",
+    srcs = ["lookup.rs"],
+    crate_root = "lookup.rs",
+    edition = "2021",
+    visibility = ["//src/bin:__pkg__"],
+)
+
+rust_test(
+    name = "lookup_test",
+    crate = ":lookup",
+    deps = [
+        "@crates//:tempfile",
+    ],
+)

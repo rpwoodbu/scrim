@@ -3,6 +3,7 @@ use config::Config;
 use fetcher::{cached_binary_path, fetch_tool};
 use linker::create_links;
 use logger::scrim_error;
+use lookup::find_in_path;
 use resolver::{resolve_tool_for_platform, Resolution};
 use telemetry::report_usage;
 use version::format_version;
@@ -37,6 +38,8 @@ struct AppEnvironment {
     home_dir: Option<PathBuf>,
     xdg_config_home: Option<PathBuf>,
     xdg_cache_home: Option<PathBuf>,
+    path: Option<std::ffi::OsString>,
+    current_exe: Option<PathBuf>,
 }
 
 impl AppEnvironment {
@@ -45,6 +48,8 @@ impl AppEnvironment {
             home_dir: env::var_os("HOME").map(PathBuf::from),
             xdg_config_home: env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
             xdg_cache_home: env::var_os("XDG_CACHE_HOME").map(PathBuf::from),
+            path: env::var_os("PATH"),
+            current_exe: env::current_exe().ok(),
         }
     }
 }
@@ -108,10 +113,10 @@ fn handle_management_command(args: &[std::ffi::OsString], app_env: &AppEnvironme
             dry_run,
             prune,
         }) => {
-            let scrim_exe = match env::current_exe() {
-                Ok(exe) => exe,
-                Err(e) => {
-                    scrim_error!("Failed to resolve current executable path: {}", e);
+            let scrim_exe = match &app_env.current_exe {
+                Some(exe) => exe.clone(),
+                None => {
+                    scrim_error!("Failed to resolve current executable path");
                     std::process::exit(1);
                 }
             };
@@ -146,7 +151,41 @@ fn handle_management_command(args: &[std::ffi::OsString], app_env: &AppEnvironme
 
 fn proxy_command(program_name: &str, args: &[std::ffi::OsString], app_env: &AppEnvironment) -> ! {
     let tool_args = if args.len() > 1 { &args[1..] } else { &[] };
-    execute_tool(program_name, tool_args, app_env);
+    let config = load_configuration(app_env);
+
+    if !config.tools.contains_key(program_name) {
+        if let Some(target_path) = find_in_path(
+            program_name,
+            app_env.path.as_deref(),
+            app_env.current_exe.as_deref(),
+        ) {
+            execute_binary(
+                program_name,
+                &target_path,
+                tool_args,
+                config.telemetry_enabled(),
+            );
+        } else {
+            scrim_error!("{}: command not found", program_name);
+            std::process::exit(127);
+        }
+    }
+
+    let host_platform = match config::Platform::host() {
+        Ok(p) => p,
+        Err(e) => {
+            scrim_error!("{}", e);
+            std::process::exit(1);
+        }
+    };
+    let target_path =
+        resolve_target_binary_path(program_name, &config, &host_platform, app_env, true);
+    execute_binary(
+        program_name,
+        &target_path,
+        tool_args,
+        config.telemetry_enabled(),
+    );
 }
 
 fn execute_tool(program_name: &str, tool_args: &[std::ffi::OsString], app_env: &AppEnvironment) -> ! {
@@ -160,9 +199,22 @@ fn execute_tool(program_name: &str, tool_args: &[std::ffi::OsString], app_env: &
     let config = load_configuration(app_env);
     let target_path =
         resolve_target_binary_path(program_name, &config, &host_platform, app_env, true);
+    execute_binary(
+        program_name,
+        &target_path,
+        tool_args,
+        config.telemetry_enabled(),
+    );
+}
 
+fn execute_binary(
+    program_name: &str,
+    target_path: &Path,
+    tool_args: &[std::ffi::OsString],
+    telemetry_enabled: bool,
+) -> ! {
     // Prepare the command
-    let mut cmd = Command::new(&target_path);
+    let mut cmd = Command::new(target_path);
 
     // Pass through all arguments
     if !tool_args.is_empty() {
@@ -170,8 +222,8 @@ fn execute_tool(program_name: &str, tool_args: &[std::ffi::OsString], app_env: &
     }
 
     // Report usage in the background (non-blocking) if enabled in config
-    if config.telemetry_enabled() {
-        report_usage(program_name, &target_path);
+    if telemetry_enabled {
+        report_usage(program_name, target_path);
     }
 
     // Replace the current process with the target tool
@@ -179,7 +231,7 @@ fn execute_tool(program_name: &str, tool_args: &[std::ffi::OsString], app_env: &
 
     // If exec returns, it failed
     scrim_error!("Failed to execute tool: {}", err);
-    std::process::exit(1);
+    std::process::exit(126);
 }
 
 fn which_tool(program_name: &str, platform_arg: Option<&str>, app_env: &AppEnvironment) {

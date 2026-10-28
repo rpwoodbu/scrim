@@ -19,6 +19,7 @@ rust_binary(
         "//src/fetcher",
         "//src/linker",
         "//src/logger",
+        "//src/lookup",
         "//src/resolver",
         "//src/telemetry",
         "//src/version",

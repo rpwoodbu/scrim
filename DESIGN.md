@@ -19,7 +19,7 @@
 - **Reliability**: Failures in telemetry or other auxiliary tasks must never block or prevent tool execution.
 - **YAGNI (You Aren't Gonna Need It)**: Favor simplicity and minimal configuration. Avoid preemptive abstractions until they are strictly required.
 - **DRY (Don't Repeat Yourself)**: Avoid duplicating logic or configuration; centralize shared behavior.
-- **No Global State**: Library modules MUST NOT read or mutate process-global state (e.g., environment variables). All global state MUST be captured at the application entrypoint and passed to internal logic via explicit parameters to ensure modularity, thread safety, and testability.
+- **No Global State**: Library modules MUST NOT read or mutate process-global state (e.g., environment variables). All global state (such as `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, and `PATH`) MUST be captured at the application entrypoint and passed to internal logic via explicit parameters to ensure modularity, thread safety, and testability.
 
 ## UX
 
@@ -88,8 +88,8 @@ The `scrim links` command creates or updates links in the specified directory `<
 The `scrim run` command executes any tool defined in the aggregated configuration directly, without requiring a symlink or hardlink to `scrim`.
 
 - **Arguments**: `<TOOL>` (name of the tool to run), followed by any optional arguments `[args...]` to pass through to the executed tool.
-- **Behavior**: Behaves identically to executing `<TOOL>` via a link. Following the convention of tools like `sudo`, `--` is used to delimit the end of `scrim` options; subsequent options and arguments are passed to the command.
-- **Error Handling**: Exits with non-zero status and an attributed error message if `<TOOL>` is omitted, if `<TOOL>` is not configured for the host platform, if invalid flags are passed to `scrim`, or if tool resolution/execution fails.
+- **Behavior**: Behaves identically to executing a configured tool via a link. Following the convention of tools like `sudo`, `--` is used to delimit the end of `scrim` options; subsequent options and arguments are passed to the command.
+- **Error Handling**: Exits with non-zero status and an attributed error message if `<TOOL>` is omitted, if `<TOOL>` is not found in the configuration, if `<TOOL>` is not configured for the host platform, if invalid flags are passed to `scrim`, or if tool resolution/execution fails.
 
 #### Which Command (`scrim which [OPTIONS] <TOOL>`)
 
@@ -98,7 +98,7 @@ The `scrim which` command outputs the precise absolute path of the binary that w
 - **Options**:
   - `--platform <PLATFORM>`: Target platform to evaluate. Defaults to the current host platform.
 - **Arguments**: `<TOOL>` (name of the tool to look up).
-- **Behavior**: Resolves `<TOOL>` for the target platform using Scrim's resolution rules and prints the target executable's absolute path to standard output without executing it or fetching missing tools.
+- **Behavior**: Resolves `<TOOL>` for the target platform using Scrim's configuration resolution rules and prints the target executable's absolute path to standard output without executing it or fetching missing tools.
 - **Error Handling**: Exits with non-zero status (`1`) and an attributed error message if `<TOOL>` is omitted, if `<TOOL>` is not found in the aggregated configuration, if `<TOOL>` is not configured for the target platform, or if configuration/resolution validation fails.
 
 
@@ -258,8 +258,17 @@ When a command (e.g., `node`) is invoked, Scrim follows this resolution logic:
             - **AppImage packages**: `.AppImage`, `.appimage`. Scrim supports Type 2 AppImages by natively parsing the ELF headers to locate the embedded SquashFS filesystem offset, and extracting the filesystem using pure Rust without requiring external tools or FUSE (`libfuse`). Type 1 AppImages (ISO 9660 based) are deprecated and explicitly rejected with an actionable error. If `archive_path` is omitted in the tool configuration, Scrim automatically defaults to executing `AppRun` at the root of the extracted image.
             All archives are unpacked into a temporary directory before atomic relocation to the cache path, and target binaries are verified to exist, checked not to be symlinks outside of the extracted directory, and marked executable (`0o755`).
 
+4.  **PATH Fallback for Undefined Proxy Commands**:
+    When Scrim is invoked as a proxy shim (i.e. `argv[0]` is `<tool>`, not `scrim`) and the tool is not defined in the aggregated configuration across any layer:
+    - Scrim inspects the `PATH` environment variable (captured at application entrypoint in `AppEnvironment`) to search for an external executable matching the command name.
+    - **Loop Prevention**: Scrim iterates through the directories in `PATH` in order. To prevent infinite loops caused by re-executing Scrim itself (such as the invoked symlink, hardlink, or any other links in `PATH` pointing to the `scrim` binary), Scrim compares each candidate's file identity (device and inode, or canonical path) against the currently running `scrim` executable. Any candidate resolving to the `scrim` binary is skipped.
+    - **Execution**: If a valid executable file is found in a subsequent `PATH` directory, Scrim resolves to this binary, records telemetry if enabled, and executes it directly via `execve`.
+    - **Command Not Found (Exit Status 127)**: Following standard POSIX shell conventions ([POSIX.1-2017 Section 2.8.2 "Exit Status for Commands"][posix-shell-exit]), if no matching executable is found across all directories in `PATH`, Scrim terminates with exit status `127` and an attributed error: `[Scrim] <tool_name>: command not found`.
+    - **Execution Failure (Exit Status 126)**: Following standard POSIX command execution conventions ([POSIX.1-2017 Section 2.8.2 "Exit Status for Commands"][posix-shell-exit]), if an executable has been resolved but execution fails when invoking `execve`, Scrim terminates with exit status `126`.
+    - **Scope**: PATH fallback applies strictly to proxy invocations (`argv[0] != "scrim"`). Management CLI commands (`scrim run`, `scrim which`) operate strictly on tools declared in the aggregated configuration; attempting to run or query an unconfigured tool via the management CLI terminates with exit status `1` and an error indicating the tool was not found in config.
+
 ### Execution
-To minimize overhead, Scrim will use `execve` (on Unix) to replace the current process with the target tool process. This ensures there is no "parent" Scrim process hanging around during tool execution.
+To minimize overhead, Scrim will use `execve` (on Unix) to replace the current process with the target tool process. This ensures there is no "parent" Scrim process hanging around during tool execution. If `execve` returns (indicating invocation failure for any reason, such as permission denial, format error, or corrupted binary), Scrim reports an attributed error and terminates with exit status `126` following standard POSIX conventions ([POSIX.1-2017 Section 2.8.2][posix-shell-exit]).
 
 ### Telemetry Hook
 Telemetry is gathered to track tool usage patterns.
@@ -269,6 +278,9 @@ Telemetry is gathered to track tool usage patterns.
     - The **Parent** process will immediately `execve()` the target tool to preserve the original PID and environment.
     - The **Child** process will handle telemetry gathering and reporting in the background, then exit silently. Currently, telemetry is simply written to a hardcoded log file at `/tmp/scrim_telemetry.log`.
     - This ensures telemetry is completely decoupled from the tool's execution latency.
+- **PATH Fallback Invocations**:
+    - When a tool is executed via PATH fallback (for undefined tools), telemetry usage is recorded if telemetry is enabled in the active configuration.
+    - The telemetry log entry retains the standard JSON structure (`tool`, `target`, `timestamp`), recording the tool name and the resolved path to the system binary (e.g., `{"tool": "node", "target": "/usr/bin/node", "timestamp": "..."}`).
 
 ### Logging & User Communication
 Scrim avoids heavy external logging crates. Instead, it uses a lightweight, internal logging module with custom macros (e.g., `scrim_error!`, `scrim_progress!`) to ensure consistent attribution.
@@ -291,7 +303,7 @@ CI and releases are automated via GitHub Actions.
 
 ### Directory Layout
 The project enforces the following prescriptive layout:
-- `/src/`: Contains the executable binary target package (`/src/bin/`) and modular library subpackages corresponding to distinct architectural concerns (e.g., CLI parsing, configuration, fetching, linking, logging, resolution, telemetry, versioning).
+- `/src/`: Contains the executable binary target package (`/src/bin/`) and modular library subpackages corresponding to distinct architectural concerns (e.g., CLI parsing, configuration, fetching, linking, logging, path lookup, resolution, telemetry, versioning).
 - `/tests/`: Contains standard unit and integration tests as well as validation tests for benchmarks thresholds.
     - Benchmark threshold tests must be marked as `manual` and `exclusive` as they are not correctness tests and require dedicated machine resources to minimize timing noise and flakiness.
 - `/benches/`: Contains the statistical microbenchmark harness code.
@@ -330,3 +342,4 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
 - **macOS Releases**: Support for building and releasing binaries for macOS (e.g., Apple Silicon / Intel).
 
 [xdg-basedir]: https://specifications.freedesktop.org/basedir/0.8/ "XDG Base Directory Specification (version 0.8)"
+[posix-shell-exit]: https://pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap02.html#tag_18_08_02 "IEEE Std 1003.1-2017 (POSIX.1) Shell Command Language - Exit Status for Commands"

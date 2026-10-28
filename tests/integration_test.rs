@@ -2840,6 +2840,322 @@ tools:
     assert!(stderr_proxy.contains("[Scrim] Error: Tool 'non_host_tool' is not configured for platform '"));
 }
 
+#[test]
+fn test_proxy_path_fallback_success() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    let shim_dir = temp_path.join("shims");
+    let sys_dir = temp_path.join("sys");
+    fs::create_dir_all(&shim_dir).unwrap();
+    fs::create_dir_all(&sys_dir).unwrap();
+
+    // Real tool in sys_dir
+    let sys_tool = sys_dir.join("fallback_tool");
+    fs::write(
+        &sys_tool,
+        "#!/bin/sh\necho \"Fallback Executed: args=$*\"\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&sys_tool).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&sys_tool, perms).unwrap();
+    }
+
+    // Symlink in shim_dir pointing to scrim
+    let shim_path = shim_dir.join("fallback_tool");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &shim_path).unwrap();
+
+    // scrim.yaml in workspace has no definition for fallback_tool
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    fs::write(
+        &scrim_yaml,
+        r#"
+default_platform: any
+telemetry: false
+tools:
+  other_tool:
+    system_path: /bin/echo
+"#,
+    )
+    .unwrap();
+
+    let path_env = format!("{}:{}", shim_dir.display(), sys_dir.display());
+    let out = Command::new(&shim_path)
+        .arg("hello")
+        .arg("world")
+        .env("PATH", &path_env)
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(stdout.trim(), "Fallback Executed: args=hello world");
+}
+
+#[test]
+fn test_proxy_path_fallback_hardlink() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    // Copy scrim_bin into temp_path first so we can create a hardlink on the same filesystem
+    let scrim_copy = temp_path.join("scrim_copy");
+    fs::copy(&scrim_bin, &scrim_copy).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&scrim_copy).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&scrim_copy, perms).unwrap();
+    }
+
+    let shim_dir = temp_path.join("shims");
+    let sys_dir = temp_path.join("sys");
+    fs::create_dir_all(&shim_dir).unwrap();
+    fs::create_dir_all(&sys_dir).unwrap();
+
+    let sys_tool = sys_dir.join("hardlink_tool");
+    fs::write(
+        &sys_tool,
+        "#!/bin/sh\necho \"Hardlink Fallback: args=$*\"\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&sys_tool).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&sys_tool, perms).unwrap();
+    }
+
+    // Hardlink in shim_dir pointing to scrim_copy
+    let shim_path = shim_dir.join("hardlink_tool");
+    #[cfg(unix)]
+    fs::hard_link(&scrim_copy, &shim_path).unwrap();
+
+    let path_env = format!("{}:{}", shim_dir.display(), sys_dir.display());
+    let out = Command::new(&shim_path)
+        .arg("arg1")
+        .env("PATH", &path_env)
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(stdout.trim(), "Hardlink Fallback: args=arg1");
+}
+
+#[test]
+fn test_proxy_path_fallback_command_not_found_exit_127() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    let shim_dir = temp_path.join("shims");
+    fs::create_dir_all(&shim_dir).unwrap();
+
+    let shim_path = shim_dir.join("missing_tool");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &shim_path).unwrap();
+
+    // PATH only contains shim_dir, so missing_tool is not found anywhere else
+    let out = Command::new(&shim_path)
+        .env("PATH", &shim_dir)
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+
+    assert_eq!(out.status.code(), Some(127));
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("[Scrim] Error: missing_tool: command not found"));
+}
+
+#[test]
+fn test_proxy_path_fallback_permission_denied_exit_126() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    let shim_dir = temp_path.join("shims");
+    let sys_dir = temp_path.join("sys");
+    fs::create_dir_all(&shim_dir).unwrap();
+    fs::create_dir_all(&sys_dir).unwrap();
+
+    // Create an unexecutable interpreter file
+    let noexec_interpreter = sys_dir.join("noexec_interpreter");
+    fs::write(&noexec_interpreter, "binary").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&noexec_interpreter).unwrap().permissions();
+        perms.set_mode(0o644); // Not executable
+        fs::set_permissions(&noexec_interpreter, perms).unwrap();
+    }
+
+    // Script with shebang pointing to the unexecutable interpreter
+    let sys_tool = sys_dir.join("perm_denied_tool");
+    fs::write(
+        &sys_tool,
+        format!("#!{}\necho hi\n", noexec_interpreter.display()),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&sys_tool).unwrap().permissions();
+        perms.set_mode(0o755); // sys_tool itself is executable, but executing it fails with EACCES
+        fs::set_permissions(&sys_tool, perms).unwrap();
+    }
+
+    let shim_path = shim_dir.join("perm_denied_tool");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &shim_path).unwrap();
+
+    let path_env = format!("{}:{}", shim_dir.display(), sys_dir.display());
+    let out = Command::new(&shim_path)
+        .env("PATH", &path_env)
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+
+    assert_eq!(out.status.code(), Some(126));
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("[Scrim] Error: Failed to execute tool:"));
+}
+
+#[test]
+fn test_proxy_path_fallback_telemetry() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    let shim_dir = temp_path.join("shims");
+    let sys_dir = temp_path.join("sys");
+    fs::create_dir_all(&shim_dir).unwrap();
+    fs::create_dir_all(&sys_dir).unwrap();
+
+    let sys_tool = sys_dir.join("telemetry_tool");
+    fs::write(
+        &sys_tool,
+        "#!/bin/sh\necho \"Telemetry test\"\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&sys_tool).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&sys_tool, perms).unwrap();
+    }
+
+    let shim_path = shim_dir.join("telemetry_tool");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &shim_path).unwrap();
+
+    // scrim.yaml with telemetry: true
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    fs::write(
+        &scrim_yaml,
+        r#"
+default_platform: any
+telemetry: true
+tools:
+  other_tool:
+    system_path: /bin/echo
+"#,
+    )
+    .unwrap();
+
+    let telemetry_log = Path::new("/tmp/scrim_telemetry.log");
+    let initial_len = if telemetry_log.exists() {
+        fs::read_to_string(telemetry_log).unwrap().len()
+    } else {
+        0
+    };
+
+    let path_env = format!("{}:{}", shim_dir.display(), sys_dir.display());
+    let out = Command::new(&shim_path)
+        .env("PATH", &path_env)
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Wait a brief moment for child process to flush telemetry
+    std::thread::sleep(std::time::Duration::from_millis(150));
+
+    let content = fs::read_to_string(telemetry_log).unwrap();
+    let new_entries = &content[initial_len..];
+    assert!(new_entries.contains("\"tool\": \"telemetry_tool\""));
+    assert!(new_entries.contains(&format!("\"target\": \"{}\"", sys_tool.display())));
+}
+
+#[test]
+fn test_scrim_run_and_which_do_not_fallback_to_path() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    let sys_dir = temp_path.join("sys");
+    fs::create_dir_all(&sys_dir).unwrap();
+
+    let sys_tool = sys_dir.join("only_in_path");
+    fs::write(&sys_tool, "#!/bin/sh\necho sys tool\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&sys_tool).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&sys_tool, perms).unwrap();
+    }
+
+    // scrim run only_in_path must fail with status 1
+    let out_run = Command::new(&scrim_bin)
+        .args(["run", "only_in_path"])
+        .env("PATH", &sys_dir)
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    assert_eq!(out_run.status.code(), Some(1));
+    let stderr_run = String::from_utf8(out_run.stderr).unwrap();
+    assert!(stderr_run.contains("[Scrim] Error: Tool 'only_in_path' not found in config"));
+
+    // scrim which only_in_path must fail with status 1
+    let out_which = Command::new(&scrim_bin)
+        .args(["which", "only_in_path"])
+        .env("PATH", &sys_dir)
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    assert_eq!(out_which.status.code(), Some(1));
+    let stderr_which = String::from_utf8(out_which.stderr).unwrap();
+    assert!(stderr_which.contains("[Scrim] Error: Tool 'only_in_path' not found in config"));
+}
+
 
 
 
