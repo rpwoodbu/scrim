@@ -36,6 +36,7 @@ pub fn create_links(
     scrim_exe: &Path,
     config: &Config,
     dry_run: bool,
+    prune: bool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     if !target_dir.is_dir() {
         return Err(format!(
@@ -107,76 +108,78 @@ pub fn create_links(
         modified = true;
     }
 
-    // 2. Remove obsolete symlinks pointing to scrim
-    match fs::read_dir(target_dir) {
-        Ok(entries) => {
-            for entry in entries {
-                let entry = match entry {
-                    Ok(e) => e,
-                    Err(e) => {
-                        scrim_error!(
-                            "Failed to read directory entry in '{}': {}",
-                            target_dir.display(),
-                            e
-                        );
-                        had_errors = true;
+    // 2. Remove obsolete symlinks pointing to scrim if prune is enabled
+    if prune {
+        match fs::read_dir(target_dir) {
+            Ok(entries) => {
+                for entry in entries {
+                    let entry = match entry {
+                        Ok(e) => e,
+                        Err(e) => {
+                            scrim_error!(
+                                "Failed to read directory entry in '{}': {}",
+                                target_dir.display(),
+                                e
+                            );
+                            had_errors = true;
+                            continue;
+                        }
+                    };
+                    let entry_path = entry.path();
+                    let file_name = match entry_path.file_name().and_then(|s| s.to_str()) {
+                        Some(name) => name.to_string(),
+                        None => continue,
+                    };
+
+                    // If this file is a tool configured for the host platform, it was just processed above
+                    if host_configured_tools.contains(&file_name) {
                         continue;
                     }
-                };
-                let entry_path = entry.path();
-                let file_name = match entry_path.file_name().and_then(|s| s.to_str()) {
-                    Some(name) => name.to_string(),
-                    None => continue,
-                };
 
-                // If this file is a tool configured for the host platform, it was just processed above
-                if host_configured_tools.contains(&file_name) {
-                    continue;
-                }
+                    // Check if entry is a symlink pointing to the scrim binary
+                    if let Ok(meta) = fs::symlink_metadata(&entry_path) {
+                        if meta.file_type().is_symlink() {
+                            let is_scrim_link = if let Ok(target) = fs::read_link(&entry_path) {
+                                let resolved_target = if target.is_relative() {
+                                    canonical_target_dir.join(&target)
+                                } else {
+                                    target.clone()
+                                };
 
-                // Check if entry is a symlink pointing to the scrim binary
-                if let Ok(meta) = fs::symlink_metadata(&entry_path) {
-                    if meta.file_type().is_symlink() {
-                        let is_scrim_link = if let Ok(target) = fs::read_link(&entry_path) {
-                            let resolved_target = if target.is_relative() {
-                                canonical_target_dir.join(&target)
+                                let canonical_resolved = fs::canonicalize(&resolved_target)
+                                    .unwrap_or(resolved_target);
+
+                                canonical_resolved == canonical_scrim_exe
                             } else {
-                                target.clone()
+                                false
                             };
 
-                            let canonical_resolved = fs::canonicalize(&resolved_target)
-                                .unwrap_or(resolved_target);
-
-                            canonical_resolved == canonical_scrim_exe
-                        } else {
-                            false
-                        };
-
-                        if is_scrim_link {
-                            if !dry_run {
-                                if let Err(e) = fs::remove_file(&entry_path) {
-                                    scrim_error!(
-                                        "Failed to remove obsolete link '{}': {}",
-                                        file_name,
-                                        e
-                                    );
-                                    had_errors = true;
+                            if is_scrim_link {
+                                if !dry_run {
+                                    if let Err(e) = fs::remove_file(&entry_path) {
+                                        scrim_error!(
+                                            "Failed to remove obsolete link '{}': {}",
+                                            file_name,
+                                            e
+                                        );
+                                        had_errors = true;
+                                    } else {
+                                        scrim_progress!("Removed obsolete link {}", file_name);
+                                        modified = true;
+                                    }
                                 } else {
-                                    scrim_progress!("Removed obsolete link {}", file_name);
+                                    scrim_progress!("Would remove obsolete link {}", file_name);
                                     modified = true;
                                 }
-                            } else {
-                                scrim_progress!("Would remove obsolete link {}", file_name);
-                                modified = true;
                             }
                         }
                     }
                 }
             }
-        }
-        Err(e) => {
-            scrim_error!("Failed to read directory '{}': {}", target_dir.display(), e);
-            had_errors = true;
+            Err(e) => {
+                scrim_error!("Failed to read directory '{}': {}", target_dir.display(), e);
+                had_errors = true;
+            }
         }
     }
 
@@ -238,7 +241,7 @@ mod tests {
         fs::write(&scrim_exe, "dummy").unwrap();
 
         let config = Config::default();
-        let res = create_links(&nonexistent, &scrim_exe, &config, false);
+        let res = create_links(&nonexistent, &scrim_exe, &config, false, false);
         assert!(res.is_err());
         assert!(res.unwrap_err().to_string().contains("does not exist"));
     }
@@ -269,7 +272,8 @@ mod tests {
             ..Default::default()
         };
 
-        let modified = create_links(&bin_dir, &scrim_exe, &config, false).unwrap();
+        // Without prune: links node and go, but does NOT remove stale_link
+        let modified = create_links(&bin_dir, &scrim_exe, &config, false, false).unwrap();
         assert!(modified);
 
         // Check node link
@@ -282,17 +286,26 @@ mod tests {
         assert!(go_link.exists());
         assert_eq!(fs::read_link(&go_link).unwrap(), Path::new("../scrim"));
 
-        // Check oldtool (stale scrim link) was removed
-        assert!(!stale_link.exists());
+        // Check oldtool (stale scrim link) was NOT removed without prune
+        assert!(stale_link.exists());
 
         // Check unrelated file remains untouched
         assert!(other_file.exists());
 
-        // Calling create_links again should succeed idempotently and return modified = false
-        let modified_second = create_links(&bin_dir, &scrim_exe, &config, false).unwrap();
+        // Calling create_links again without prune should succeed and return modified = false
+        let modified_second = create_links(&bin_dir, &scrim_exe, &config, false, false).unwrap();
         assert!(!modified_second);
-        assert!(node_link.exists());
-        assert!(go_link.exists());
+        assert!(stale_link.exists());
+
+        // Calling create_links with prune should remove stale_link and return modified = true
+        let modified_prune = create_links(&bin_dir, &scrim_exe, &config, false, true).unwrap();
+        assert!(modified_prune);
+        assert!(!stale_link.exists());
+        assert!(other_file.exists());
+
+        // Calling create_links again with prune should succeed idempotently and return modified = false
+        let modified_prune_second = create_links(&bin_dir, &scrim_exe, &config, false, true).unwrap();
+        assert!(!modified_prune_second);
     }
 
     #[test]
@@ -316,23 +329,37 @@ mod tests {
             ..Default::default()
         };
 
-        // In dry run, modified should be true (needs to link node and remove oldtool)
-        let modified = create_links(&bin_dir, &scrim_exe, &config, true).unwrap();
+        // In dry run without prune, modified should be true (needs to link node), but oldtool is not touched
+        let modified = create_links(&bin_dir, &scrim_exe, &config, true, false).unwrap();
         assert!(modified);
 
         // Neither node was created nor oldtool was removed
         assert!(!bin_dir.join("node").exists());
         assert!(stale_link.exists());
 
-        // Now perform actual link creation
-        let actual_modified = create_links(&bin_dir, &scrim_exe, &config, false).unwrap();
+        // Now perform actual link creation without prune
+        let actual_modified = create_links(&bin_dir, &scrim_exe, &config, false, false).unwrap();
         assert!(actual_modified);
         assert!(bin_dir.join("node").exists());
+        assert!(stale_link.exists());
+
+        // Now dry-run without prune: should report modified = false because node exists and prune is off
+        let dry_modified_clean = create_links(&bin_dir, &scrim_exe, &config, true, false).unwrap();
+        assert!(!dry_modified_clean);
+
+        // Dry-run with prune: should report modified = true because oldtool would be removed
+        let dry_prune_modified = create_links(&bin_dir, &scrim_exe, &config, true, true).unwrap();
+        assert!(dry_prune_modified);
+        assert!(stale_link.exists());
+
+        // Actual run with prune: removes oldtool
+        let actual_prune_modified = create_links(&bin_dir, &scrim_exe, &config, false, true).unwrap();
+        assert!(actual_prune_modified);
         assert!(!stale_link.exists());
 
-        // Now dry-run again: should report modified = false
-        let dry_modified_clean = create_links(&bin_dir, &scrim_exe, &config, true).unwrap();
-        assert!(!dry_modified_clean);
+        // Dry-run with prune again: reports clean
+        let dry_prune_clean = create_links(&bin_dir, &scrim_exe, &config, true, true).unwrap();
+        assert!(!dry_prune_clean);
     }
 
     #[test]
@@ -364,7 +391,7 @@ mod tests {
         };
 
         // Execution should return error because node and go could not be linked
-        let res = create_links(&bin_dir, &scrim_exe, &config, false);
+        let res = create_links(&bin_dir, &scrim_exe, &config, false, false);
         assert!(res.is_err());
 
         // Verify 'node' was not overwritten
@@ -426,20 +453,21 @@ mod tests {
         symlink(Path::new("../scrim"), &obsolete_link).unwrap();
         assert!(obsolete_link.exists());
 
-        // Run dry-run first
-        let dry_modified = create_links(&bin_dir, &scrim_exe, &config, true).unwrap();
+        // Run dry-run without prune
+        let dry_modified = create_links(&bin_dir, &scrim_exe, &config, true, false).unwrap();
         assert!(dry_modified);
-        // Link for host_tool not created yet, obsolete link not removed yet
         assert!(!bin_dir.join("host_tool").exists());
         assert!(obsolete_link.exists());
 
-        // Normal run
-        let modified = create_links(&bin_dir, &scrim_exe, &config, false).unwrap();
+        // Normal run without prune
+        let modified = create_links(&bin_dir, &scrim_exe, &config, false, false).unwrap();
         assert!(modified);
-
-        // Host tool link was created
         assert!(bin_dir.join("host_tool").exists());
-        // Unconfigured tool link was removed
+        assert!(obsolete_link.exists());
+
+        // Run with prune
+        let modified_prune = create_links(&bin_dir, &scrim_exe, &config, false, true).unwrap();
+        assert!(modified_prune);
         assert!(!bin_dir.join("unconfigured_tool").exists());
     }
 
@@ -463,7 +491,7 @@ mod tests {
 
             if fs::remove_file(&stale_link).is_err() {
                 let config = Config::default();
-                let res = create_links(&bin_dir, &scrim_exe, &config, false);
+                let res = create_links(&bin_dir, &scrim_exe, &config, false, true);
                 perms.set_mode(0o755);
                 let _ = fs::set_permissions(&bin_dir, perms);
                 assert!(res.is_err());
@@ -495,7 +523,7 @@ mod tests {
 
             if fs::read_dir(&bin_dir).is_err() {
                 let config = Config::default();
-                let res = create_links(&bin_dir, &scrim_exe, &config, false);
+                let res = create_links(&bin_dir, &scrim_exe, &config, false, true);
                 perms.set_mode(0o755);
                 let _ = fs::set_permissions(&bin_dir, perms);
                 assert!(res.is_err());

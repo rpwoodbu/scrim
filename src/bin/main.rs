@@ -103,7 +103,11 @@ fn handle_management_command(args: &[std::ffi::OsString], app_env: &AppEnvironme
                 }
             }
         }
-        CliParseResult::Command(CliCommand::Links { dir, dry_run }) => {
+        CliParseResult::Command(CliCommand::Links {
+            dir,
+            dry_run,
+            prune,
+        }) => {
             let scrim_exe = match env::current_exe() {
                 Ok(exe) => exe,
                 Err(e) => {
@@ -112,7 +116,7 @@ fn handle_management_command(args: &[std::ffi::OsString], app_env: &AppEnvironme
                 }
             };
             let config = load_configuration(app_env);
-            match create_links(&dir, &scrim_exe, &config, dry_run) {
+            match create_links(&dir, &scrim_exe, &config, dry_run, prune) {
                 Ok(modified) => {
                     if dry_run && modified {
                         std::process::exit(2);

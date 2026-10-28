@@ -60,6 +60,7 @@ The `scrim links` command creates or updates links in the specified directory `<
 
 - **Options**:
   - `-n, --dry-run`: Performs a dry run without creating or removing any symlinks. Reports the actions that would be performed and exits with a status code indicating whether any modifications are needed. The exit code behavior is documented in the command's help message.
+  - `-p, --prune`: Removes obsolete symbolic links in `<DIR>` that point to the `scrim` binary but are no longer configured for the current host platform. By default (without `--prune`), obsolete links are ignored and left intact.
 - **Arguments**: `<DIR>` (path to directory where links should be created/updated).
 - **Behavior**:
   1. Resolves aggregated configuration across system, user, and workspace layers.
@@ -70,15 +71,16 @@ The `scrim links` command creates or updates links in the specified directory `<
      - If `<DIR>/<tool_name>` already exists as a symbolic link pointing to the relative path of the `scrim` binary, it is skipped.
      - If an existing file or symlink pointing elsewhere is present, reports an error, skips it, and continues.
      - Otherwise, in normal mode, creates a symbolic link at `<DIR>/<tool_name>` pointing to the relative path of the `scrim` binary and logs progress (`[Scrim] Linked <tool_name> -> <rel_path>`). In dry-run mode, logs what link would be created (`[Scrim] Would link <tool_name> -> <rel_path>`) without modifying the filesystem.
-  6. Scans `<DIR>` for any existing symbolic links pointing to the `scrim` binary whose command names are not among the tools configured for the current host platform:
+  6. If `--prune` is specified, scans `<DIR>` for any existing symbolic links pointing to the `scrim` binary whose command names are not among the tools configured for the current host platform:
      - In normal mode, removes the obsolete symlink and logs progress (`[Scrim] Removed obsolete link <file_name>`).
      - In dry-run mode, logs what link would be removed (`[Scrim] Would remove obsolete link <file_name>`) without modifying the filesystem.
-  7. If all links are already correct and no changes would be made, logs that fact (`[Scrim] All links are correct`).
+     If `--prune` is not specified, obsolete links are skipped and left unchanged.
+  7. If all links are already correct and no changes were made (or would be made in dry-run mode), logs that fact (`[Scrim] All links are correct`).
 - **Exit Status**:
   - In normal mode: exits with status `0` on success.
   - In dry-run mode:
     - Exits with status `0` if all links are already correct (no changes would be made).
-    - Exits with status `2` if changes would have been made (links to create or obsolete links to remove).
+    - Exits with status `2` if changes would have been made (links to create, or obsolete links to remove when `--prune` is enabled).
   - On error (in either mode): exits with non-zero status (`1`) and an error message if `<DIR>` is omitted, if `<DIR>` does not exist or is not a directory, if the `scrim` executable path cannot be determined, if conflicting files or symlinks prevent link creation, or if filesystem operations fail.
 
 #### Run Command (`scrim run <TOOL> [args...]`)

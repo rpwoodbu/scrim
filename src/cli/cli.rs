@@ -12,6 +12,7 @@ pub enum CliCommand {
     Links {
         dir: PathBuf,
         dry_run: bool,
+        prune: bool,
     },
     Run {
         tool: String,
@@ -72,6 +73,13 @@ pub fn build_cli() -> Command {
                         .action(clap::ArgAction::SetTrue)
                         .help("Perform a dry run without modifying any links."),
                 )
+                .arg(
+                    Arg::new("prune")
+                        .long("prune")
+                        .short('p')
+                        .action(clap::ArgAction::SetTrue)
+                        .help("Remove obsolete symbolic links pointing to the scrim binary."),
+                )
                 .arg(Arg::new("dir").value_name("DIR")),
         )
         .subcommand(
@@ -120,7 +128,12 @@ where
                     );
                 };
                 let dry_run = sub_matches.get_flag("dry_run");
-                CliParseResult::Command(CliCommand::Links { dir, dry_run })
+                let prune = sub_matches.get_flag("prune");
+                CliParseResult::Command(CliCommand::Links {
+                    dir,
+                    dry_run,
+                    prune,
+                })
             }
             Some(("run", sub_matches)) => {
                 let Some(tool) = sub_matches.get_one::<String>("tool").cloned() else {
@@ -390,6 +403,7 @@ mod tests {
             CliParseResult::Command(CliCommand::Links {
                 dir: PathBuf::from("/tmp/bin"),
                 dry_run: false,
+                prune: false,
             })
         );
         assert_eq!(
@@ -397,6 +411,7 @@ mod tests {
             CliParseResult::Command(CliCommand::Links {
                 dir: PathBuf::from("/tmp/bin"),
                 dry_run: true,
+                prune: false,
             })
         );
         assert_eq!(
@@ -404,6 +419,7 @@ mod tests {
             CliParseResult::Command(CliCommand::Links {
                 dir: PathBuf::from("/tmp/bin"),
                 dry_run: true,
+                prune: false,
             })
         );
         assert_eq!(
@@ -411,6 +427,7 @@ mod tests {
             CliParseResult::Command(CliCommand::Links {
                 dir: PathBuf::from("/tmp/bin"),
                 dry_run: true,
+                prune: false,
             })
         );
         assert_eq!(
@@ -418,6 +435,55 @@ mod tests {
             CliParseResult::Command(CliCommand::Links {
                 dir: PathBuf::from("/tmp/bin"),
                 dry_run: true,
+                prune: false,
+            })
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "links", "-p", "/tmp/bin"]),
+            CliParseResult::Command(CliCommand::Links {
+                dir: PathBuf::from("/tmp/bin"),
+                dry_run: false,
+                prune: true,
+            })
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "links", "--prune", "/tmp/bin"]),
+            CliParseResult::Command(CliCommand::Links {
+                dir: PathBuf::from("/tmp/bin"),
+                dry_run: false,
+                prune: true,
+            })
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "links", "/tmp/bin", "-p"]),
+            CliParseResult::Command(CliCommand::Links {
+                dir: PathBuf::from("/tmp/bin"),
+                dry_run: false,
+                prune: true,
+            })
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "links", "-n", "-p", "/tmp/bin"]),
+            CliParseResult::Command(CliCommand::Links {
+                dir: PathBuf::from("/tmp/bin"),
+                dry_run: true,
+                prune: true,
+            })
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "links", "-np", "/tmp/bin"]),
+            CliParseResult::Command(CliCommand::Links {
+                dir: PathBuf::from("/tmp/bin"),
+                dry_run: true,
+                prune: true,
+            })
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "links", "--dry-run", "--prune", "/tmp/bin"]),
+            CliParseResult::Command(CliCommand::Links {
+                dir: PathBuf::from("/tmp/bin"),
+                dry_run: true,
+                prune: true,
             })
         );
         assert_eq!(
@@ -426,6 +492,10 @@ mod tests {
         );
         assert_eq!(
             parse_management_cli(["scrim", "links", "-n"]),
+            CliParseResult::Error("directory argument required for links command".to_string())
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "links", "-p"]),
             CliParseResult::Error("directory argument required for links command".to_string())
         );
     }

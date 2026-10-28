@@ -1026,7 +1026,7 @@ tools:
     let unrelated_file = target_bin.join("unrelated.txt");
     fs::write(&unrelated_file, "keep me").unwrap();
 
-    // 4. Run `scrim links <target_bin>`
+    // 4. Run `scrim links <target_bin>` without --prune: tool1 is linked, obsolete_tool is left intact
     let output_links = Command::new(&scrim_bin)
         .arg("links")
         .arg(&target_bin)
@@ -1037,13 +1037,26 @@ tools:
 
     assert!(output_links.status.success(), "scrim links command failed: {}", stderr_links);
     assert!(stderr_links.contains("[Scrim] Linked tool1"));
-    assert!(stderr_links.contains("[Scrim] Removed obsolete link obsolete_tool"));
+    assert!(!stderr_links.contains("[Scrim] Removed obsolete link"));
 
-    // Verify tool1 link was created and works
+    // Verify tool1 link was created and works, and stale_link is still present
     let tool1_link = target_bin.join("tool1");
     assert!(tool1_link.exists());
-    assert!(!stale_link.exists());
+    assert!(stale_link.exists());
     assert!(unrelated_file.exists());
+
+    // 4b. Run `scrim links --prune <target_bin>`: removes obsolete_tool
+    let output_prune = Command::new(&scrim_bin)
+        .arg("links")
+        .arg("--prune")
+        .arg(&target_bin)
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim links --prune <target_bin>");
+    let stderr_prune = String::from_utf8(output_prune.stderr).unwrap();
+    assert!(output_prune.status.success(), "scrim links --prune failed: {}", stderr_prune);
+    assert!(stderr_prune.contains("[Scrim] Removed obsolete link obsolete_tool"));
+    assert!(!stale_link.exists());
 
     // 5. Execute the created tool1 link as a shim
     let output_shim = Command::new(&tool1_link)
@@ -1188,7 +1201,7 @@ tools:
     #[cfg(unix)]
     std::os::unix::fs::symlink(&scrim_bin, &stale_link).unwrap();
 
-    // 4. Run `scrim links -n <target_bin>`: changes would be made -> exit code 2
+    // 4. Run `scrim links -n <target_bin>` (no prune): changes would be made (link tool1) -> exit code 2
     let output_dry_run_short = Command::new(&scrim_bin)
         .arg("links")
         .arg("-n")
@@ -1200,27 +1213,28 @@ tools:
     let stderr_dry_run_short = String::from_utf8(output_dry_run_short.stderr).unwrap();
     assert!(stderr_dry_run_short.to_lowercase().contains("dry-run"));
     assert!(stderr_dry_run_short.contains("[Scrim] Would link tool1"));
-    assert!(stderr_dry_run_short.contains("[Scrim] Would remove obsolete link obsolete_tool"));
+    assert!(!stderr_dry_run_short.contains("[Scrim] Would remove obsolete link"));
 
     // Verify filesystem was NOT modified
     let tool1_link = target_bin.join("tool1");
     assert!(!tool1_link.exists());
     assert!(stale_link.exists());
 
-    // 5. Test with `--dry-run` long flag as well
-    let output_dry_run_long = Command::new(&scrim_bin)
+    // 5. Test with `--dry-run --prune` flags: both link and remove are reported -> exit code 2
+    let output_dry_run_prune = Command::new(&scrim_bin)
         .arg("links")
         .arg("--dry-run")
+        .arg("--prune")
         .arg(&target_bin)
         .current_dir(temp_path)
         .output()
-        .expect("Failed to run scrim links --dry-run <target_bin>");
-    assert_eq!(output_dry_run_long.status.code(), Some(2));
-    let stderr_dry_run_long = String::from_utf8(output_dry_run_long.stderr).unwrap();
-    assert!(stderr_dry_run_long.contains("[Scrim] Would link tool1"));
-    assert!(stderr_dry_run_long.contains("[Scrim] Would remove obsolete link obsolete_tool"));
+        .expect("Failed to run scrim links --dry-run --prune <target_bin>");
+    assert_eq!(output_dry_run_prune.status.code(), Some(2));
+    let stderr_dry_run_prune = String::from_utf8(output_dry_run_prune.stderr).unwrap();
+    assert!(stderr_dry_run_prune.contains("[Scrim] Would link tool1"));
+    assert!(stderr_dry_run_prune.contains("[Scrim] Would remove obsolete link obsolete_tool"));
 
-    // 6. Run actual `scrim links <target_bin>` to apply changes
+    // 6. Run actual `scrim links <target_bin>` (without prune)
     let output_actual = Command::new(&scrim_bin)
         .arg("links")
         .arg(&target_bin)
@@ -1231,9 +1245,9 @@ tools:
     let stderr_actual = String::from_utf8(output_actual.stderr).unwrap();
     assert!(!stderr_actual.to_lowercase().contains("dry-run"));
     assert!(tool1_link.exists());
-    assert!(!stale_link.exists());
+    assert!(stale_link.exists()); // stale link remains without prune
 
-    // 7. Run `scrim links -n <target_bin>` when all links are already correct -> exit code 0
+    // 7. Run `scrim links -n <target_bin>` without prune: all configured links are correct -> exit code 0
     let output_dry_clean = Command::new(&scrim_bin)
         .arg("links")
         .arg("-n")
@@ -1245,6 +1259,43 @@ tools:
     let stderr_dry_clean = String::from_utf8(output_dry_clean.stderr).unwrap();
     assert!(stderr_dry_clean.contains("[Scrim] All links are correct"));
     assert!(!stderr_dry_clean.contains("[Scrim] Would link tool1"));
+
+    // 7b. Run `scrim links -n -p <target_bin>`: obsolete link exists and prune requested -> exit code 2
+    let output_dry_prune_needed = Command::new(&scrim_bin)
+        .arg("links")
+        .arg("-n")
+        .arg("-p")
+        .arg(&target_bin)
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim links -n -p <target_bin>");
+    assert_eq!(output_dry_prune_needed.status.code(), Some(2));
+    let stderr_dry_prune_needed = String::from_utf8(output_dry_prune_needed.stderr).unwrap();
+    assert!(stderr_dry_prune_needed.contains("[Scrim] Would remove obsolete link obsolete_tool"));
+
+    // 7c. Run actual `scrim links -p <target_bin>`: removes obsolete_tool
+    let output_actual_prune = Command::new(&scrim_bin)
+        .arg("links")
+        .arg("-p")
+        .arg(&target_bin)
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run actual scrim links -p");
+    assert_eq!(output_actual_prune.status.code(), Some(0));
+    assert!(!stale_link.exists());
+
+    // 7d. Run `scrim links -n -p <target_bin>` now that all links are correct and pruned -> exit code 0
+    let output_dry_prune_clean = Command::new(&scrim_bin)
+        .arg("links")
+        .arg("-n")
+        .arg("-p")
+        .arg(&target_bin)
+        .current_dir(temp_path)
+        .output()
+        .expect("Failed to run scrim links -n -p after prune");
+    assert_eq!(output_dry_prune_clean.status.code(), Some(0));
+    let stderr_dry_prune_clean = String::from_utf8(output_dry_prune_clean.stderr).unwrap();
+    assert!(stderr_dry_prune_clean.contains("[Scrim] All links are correct"));
 
     // 8. Run `scrim links -n <target_bin>` with conflict -> exit code 1
     let config_conflicts = format!(
@@ -2689,9 +2740,9 @@ tools:
     std::os::unix::fs::symlink(&scrim_bin, &obsolete_link).unwrap();
     assert!(obsolete_link.exists());
 
-    // 1. Dry run
+    // 1. Dry run with --prune
     let out_dry = Command::new(&scrim_bin)
-        .args(["links", "-n", "bin"])
+        .args(["links", "-n", "-p", "bin"])
         .current_dir(temp_path)
         .output()
         .unwrap();
@@ -2702,22 +2753,34 @@ tools:
     assert!(!bin_dir.join("host_tool").exists());
     assert!(obsolete_link.exists());
 
-    // 2. Normal run
-    let out = Command::new(&scrim_bin)
+    // 2. Normal run without --prune: links host_tool, does not prune other_tool
+    let out_no_prune = Command::new(&scrim_bin)
         .args(["links", "bin"])
+        .current_dir(temp_path)
+        .output()
+        .unwrap();
+    assert!(out_no_prune.status.success());
+    let stderr_out_no_prune = String::from_utf8(out_no_prune.stderr).unwrap();
+    assert!(stderr_out_no_prune.contains("[Scrim] Linked host_tool"));
+    assert!(!stderr_out_no_prune.contains("[Scrim] Removed obsolete link"));
+    assert!(bin_dir.join("host_tool").exists());
+    assert!(obsolete_link.exists());
+
+    // 3. Normal run with --prune: removes other_tool
+    let out = Command::new(&scrim_bin)
+        .args(["links", "-p", "bin"])
         .current_dir(temp_path)
         .output()
         .unwrap();
     assert!(out.status.success());
     let stderr_out = String::from_utf8(out.stderr).unwrap();
-    assert!(stderr_out.contains("[Scrim] Linked host_tool"));
     assert!(stderr_out.contains("[Scrim] Removed obsolete link other_tool"));
     assert!(bin_dir.join("host_tool").exists());
     assert!(!bin_dir.join("other_tool").exists());
 
-    // 3. Second run should be idempotent
+    // 4. Second run with --prune should be idempotent
     let out_clean = Command::new(&scrim_bin)
-        .args(["links", "bin"])
+        .args(["links", "-p", "bin"])
         .current_dir(temp_path)
         .output()
         .unwrap();
