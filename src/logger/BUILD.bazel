@@ -7,6 +7,7 @@ rust_library(
     edition = "2021",
     visibility = [
         "//src/bin:__pkg__",
+        "//src/config:__pkg__",
         "//src/fetcher:__pkg__",
         "//src/linker:__pkg__",
     ],

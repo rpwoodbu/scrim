@@ -6,6 +6,13 @@ macro_rules! scrim_error {
 }
 
 #[macro_export]
+macro_rules! scrim_warn {
+    ($($arg:tt)*) => {
+        eprintln!("[Scrim] Warning: {}", format_args!($($arg)*));
+    };
+}
+
+#[macro_export]
 macro_rules! scrim_progress {
     ($($arg:tt)*) => {
         eprintln!("[Scrim] {}", format_args!($($arg)*));

@@ -3156,6 +3156,51 @@ fn test_scrim_run_and_which_do_not_fallback_to_path() {
     assert!(stderr_which.contains("[Scrim] Error: Tool 'only_in_path' not found in config"));
 }
 
+#[test]
+fn test_syntactic_parse_error_tolerance_in_proxy_invocation() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    // 1. Create a broken scrim.yaml in the workspace (bad YAML syntax)
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    fs::write(&scrim_yaml, ": invalid yaml : [unterminated").unwrap();
+
+    // 2. Put a mock node binary in a "sys" directory on PATH
+    let sys_dir = temp_path.join("sys");
+    fs::create_dir_all(&sys_dir).unwrap();
+    let sys_node = sys_dir.join("node");
+    fs::write(&sys_node, "#!/bin/sh\necho external node\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&sys_node).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&sys_node, perms).unwrap();
+    }
+
+    // 3. Create proxy shim node -> scrim
+    let shim_path = temp_path.join("node");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &shim_path).unwrap();
+
+    // 4. Run the shim in the workspace: Scrim should warn on the syntax error,
+    // ignore the broken file, and fall back to the external node in PATH!
+    let output = Command::new(&shim_path)
+        .current_dir(temp_path)
+        .env("PATH", &sys_dir)
+        .output()
+        .expect("Failed to execute node shim");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(stdout.trim(), "external node");
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("[Scrim] Warning: Failed to parse configuration file"));
+}
+
+
 
 
 

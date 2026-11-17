@@ -1,5 +1,6 @@
 pub use platform::{Arch, Os, Platform};
 
+use logger::scrim_warn;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -595,21 +596,31 @@ fn read_config_internal(
 
     import_stack.push(canonical);
 
-    let content = std::fs::read_to_string(path).map_err(|e| {
-        format!(
-            "Failed to read configuration file '{}': {}",
-            path.display(),
-            e
-        )
-    })?;
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) => {
+            scrim_warn!(
+                "Failed to read configuration file '{}': {}. Ignoring file.",
+                path.display(),
+                e
+            );
+            import_stack.pop();
+            return Ok(Config::default());
+        }
+    };
 
-    let mut parsed: Config = serde_yaml::from_str(&content).map_err(|e| {
-        format!(
-            "Failed to parse configuration file '{}': {}",
-            path.display(),
-            e
-        )
-    })?;
+    let mut parsed: Config = match serde_yaml::from_str(&content) {
+        Ok(c) => c,
+        Err(e) => {
+            scrim_warn!(
+                "Failed to parse configuration file '{}': {}. Ignoring file.",
+                path.display(),
+                e
+            );
+            import_stack.pop();
+            return Ok(Config::default());
+        }
+    };
 
     desugar_file_tools(&mut parsed, Some(path))?;
 
@@ -1956,5 +1967,63 @@ tools:
             tool.validate("mytool").is_ok(),
             "Expected tool with direct url, sha256, and archive_path to validate"
         );
+    }
+
+    #[test]
+    fn test_syntactic_parse_error_tolerance_across_layers() {
+        let root = tempdir().unwrap();
+
+        // 1. Lower layer (parent) has valid tool "parent_tool"
+        let parent_config = root.path().join("scrim.yaml");
+        fs::write(
+            &parent_config,
+            r#"
+tools:
+  parent_tool:
+    platforms:
+      linux-x86_64:
+        system_path: /bin/parent
+"#,
+        )
+        .unwrap();
+
+        // 2. Child directory has a completely malformed scrim.yaml (syntax error)
+        let child_dir = root.path().join("child");
+        fs::create_dir_all(&child_dir).unwrap();
+        let child_config = child_dir.join("scrim.yaml");
+        fs::write(&child_config, ": this is invalid YAML: [unterminated").unwrap();
+
+        // Loading from child_dir should succeed: child file is discarded with warning,
+        // and parent_tool is retained!
+        let config = load_config(&child_dir, Some(root.path()), None).expect("Should tolerate syntax error");
+        assert!(config.tools.contains_key("parent_tool"));
+    }
+
+    #[test]
+    fn test_syntactic_parse_error_tolerance_in_imports() {
+        let root = tempdir().unwrap();
+
+        // Imported file has bad YAML syntax
+        let bad_import = root.path().join("bad_import.yaml");
+        fs::write(&bad_import, "not: { valid: yaml: [").unwrap();
+
+        // Main config imports the bad file, but defines main_tool
+        let main_config = root.path().join("scrim.yaml");
+        fs::write(
+            &main_config,
+            r#"
+imports:
+  - bad_import.yaml
+tools:
+  main_tool:
+    platforms:
+      linux-x86_64:
+        system_path: /bin/main
+"#,
+        )
+        .unwrap();
+
+        let config = read_config(&main_config).expect("Should tolerate syntax error in import");
+        assert!(config.tools.contains_key("main_tool"));
     }
 }

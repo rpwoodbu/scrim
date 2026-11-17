@@ -13,6 +13,7 @@ rust_library(
     ],
     deps = [
         ":platform",
+        "//src/logger",
         "@crates//:serde",
         "@crates//:serde_with",
         "@crates//:serde_yaml",
