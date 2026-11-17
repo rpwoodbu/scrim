@@ -1,5 +1,7 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
-use config::Config;
+use config::{Config, ToolConfig};
+use logger::scrim_warn;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DigestAlgorithm {
@@ -48,16 +50,121 @@ pub fn resolve_tool_for_platform(
     config: &Config,
     platform: &config::Platform,
 ) -> Result<Option<Resolution>, String> {
-    if let Some(tool_config) = config.tools.get(program_name) {
-        tool_config.validate(program_name)?;
+    resolve_tool_for_platform_with_fallback(program_name, config, platform, false)
+}
 
-        let plat_opt = tool_config.get_platform(platform);
-
-        // If the tool has explicit platform blocks and none match the target platform (and no template),
-        // it is unconfigured for this platform.
-        if !tool_config.platforms.is_empty() && plat_opt.is_none() && tool_config.template.is_none() {
-            return Ok(None);
+fn evaluate_with_fallback<T, F>(
+    tool_name: &str,
+    tool_config: &ToolConfig,
+    allow_fallback: bool,
+    mut evaluate: F,
+) -> Result<Option<T>, String>
+where
+    F: FnMut(&ToolConfig) -> Result<Option<T>, String>,
+{
+    for layer in tool_config.layers() {
+        match evaluate(layer) {
+            Ok(res) => return Ok(res),
+            Err(err) => {
+                if allow_fallback {
+                    scrim_warn!(
+                        "Tool '{}' has an invalid configuration: {}. Falling back to lower-precedence configuration.",
+                        tool_name,
+                        err
+                    );
+                } else {
+                    return Err(err);
+                }
+            }
         }
+    }
+    Ok(None)
+}
+
+pub fn resolve_tool_for_platform_with_fallback(
+    program_name: &str,
+    config: &Config,
+    platform: &config::Platform,
+    allow_fallback: bool,
+) -> Result<Option<Resolution>, String> {
+    let Some(tool_config) = config.tools.get(program_name) else {
+        return Ok(None);
+    };
+
+    evaluate_with_fallback(program_name, tool_config, allow_fallback, |layer| {
+        resolve_single_tool(program_name, layer, config, platform)
+    })
+}
+
+pub fn resolve_effective_tool_for_platform(
+    tool_name: &str,
+    config: &Config,
+    platform: &config::Platform,
+    allow_fallback: bool,
+) -> Result<Option<ToolConfig>, String> {
+    let Some(tool_config) = config.tools.get(tool_name) else {
+        return Ok(None);
+    };
+
+    evaluate_with_fallback(tool_name, tool_config, allow_fallback, |layer| {
+        layer.effective_for_platform(tool_name, config, platform)
+    })
+}
+
+#[derive(Debug, PartialEq)]
+pub struct EffectiveConfigResolution {
+    pub config: Config,
+    pub errors: Vec<String>,
+}
+
+pub fn resolve_effective_config_for_platform(
+    config: &Config,
+    platform: &config::Platform,
+    allow_fallback: bool,
+) -> EffectiveConfigResolution {
+    let mut effective_tools = BTreeMap::new();
+    let mut errors = Vec::new();
+
+    for (tool_name, tool_config) in &config.tools {
+        match evaluate_with_fallback(tool_name, tool_config, allow_fallback, |layer| {
+            layer.effective_for_platform(tool_name, config, platform)
+        }) {
+            Ok(Some(eff_tool)) => {
+                effective_tools.insert(tool_name.clone(), eff_tool);
+            }
+            Ok(None) => {}
+            Err(e) => {
+                errors.push(e);
+            }
+        }
+    }
+
+    EffectiveConfigResolution {
+        config: Config {
+            default_platform: None,
+            telemetry: config.telemetry,
+            imports: Vec::new(),
+            tools: effective_tools,
+        },
+        errors,
+    }
+}
+
+fn resolve_single_tool(
+    program_name: &str,
+    tool_config: &ToolConfig,
+    config: &Config,
+    platform: &config::Platform,
+) -> Result<Option<Resolution>, String> {
+    tool_config.validate(program_name)?;
+
+    let plat_opt = tool_config.get_platform(platform);
+
+    // If the tool has explicit platform blocks and none match the target platform (and no template),
+    // it is unconfigured for this platform.
+    if !tool_config.platforms.is_empty() && plat_opt.is_none() && tool_config.template.is_none() {
+        return Ok(None);
+    }
 
         let tool_system_path = plat_opt
             .and_then(|p| p.system_path.as_deref())
@@ -238,7 +345,6 @@ pub fn resolve_tool_for_platform(
                 program_name
             ));
         }
-    }
 
     Ok(None)
 }
@@ -660,5 +766,127 @@ tools:
             result
         );
         assert!(result.unwrap_err().contains("specifies 'url' without a digest"));
+    }
+
+    #[test]
+    fn test_resolve_effective_tool_for_platform_with_fallback() {
+        let mut lower_tools = BTreeMap::new();
+        lower_tools.insert(
+            "node".to_string(),
+            ToolConfig {
+                system_path: Some("/bin/lower_node".to_string()),
+                ..Default::default()
+            },
+        );
+        let lower = Config {
+            tools: lower_tools,
+            ..Default::default()
+        };
+
+        let mut higher_tools = BTreeMap::new();
+        // Broken node in higher layer (missing digest)
+        higher_tools.insert(
+            "node".to_string(),
+            ToolConfig {
+                url: Some("https://example.com/broken.tar.gz".to_string()),
+                ..Default::default()
+            },
+        );
+        let higher = Config {
+            tools: higher_tools,
+            ..Default::default()
+        };
+
+        let merged = lower.merge(higher);
+        let host = config::Platform::host().unwrap();
+
+        // 1. Without allow_fallback: fails with semantic error
+        let err = resolve_effective_tool_for_platform("node", &merged, &host, false);
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("specifies 'url' without a digest"));
+
+        // 2. With allow_fallback: falls back to lower_node
+        let res = resolve_effective_tool_for_platform("node", &merged, &host, true).unwrap();
+        assert!(res.is_some());
+        let eff = res.unwrap();
+        assert_eq!(
+            eff.platforms.get("any").unwrap().system_path.as_deref(),
+            Some("/bin/lower_node")
+        );
+    }
+
+    #[test]
+    fn test_resolve_effective_config_for_platform_with_fallback() {
+        let mut lower_tools = BTreeMap::new();
+        lower_tools.insert(
+            "node".to_string(),
+            ToolConfig {
+                system_path: Some("/bin/lower_node".to_string()),
+                ..Default::default()
+            },
+        );
+        let lower = Config {
+            tools: lower_tools,
+            ..Default::default()
+        };
+
+        let mut higher_tools = BTreeMap::new();
+        higher_tools.insert(
+            "good_tool".to_string(),
+            ToolConfig {
+                system_path: Some("/bin/good".to_string()),
+                ..Default::default()
+            },
+        );
+        // Broken tool without fallback
+        higher_tools.insert(
+            "broken_tool".to_string(),
+            ToolConfig {
+                url: Some("https://example.com/bad.tar.gz".to_string()),
+                ..Default::default()
+            },
+        );
+        // Broken node with fallback in lower
+        higher_tools.insert(
+            "node".to_string(),
+            ToolConfig {
+                url: Some("https://example.com/bad_node.tar.gz".to_string()),
+                ..Default::default()
+            },
+        );
+        let higher = Config {
+            tools: higher_tools,
+            ..Default::default()
+        };
+
+        let merged = lower.merge(higher);
+        let host = config::Platform::host().unwrap();
+
+        // 1. Without allow_fallback: broken_tool and node report errors, good_tool is in config
+        let res_no_fallback = resolve_effective_config_for_platform(&merged, &host, false);
+        assert!(res_no_fallback.config.tools.contains_key("good_tool"));
+        assert!(!res_no_fallback.config.tools.contains_key("broken_tool"));
+        assert!(!res_no_fallback.config.tools.contains_key("node"));
+        assert_eq!(res_no_fallback.errors.len(), 2);
+
+        // 2. With allow_fallback: broken_tool omitted, node recovered from lower, errors is empty
+        let res_fallback = resolve_effective_config_for_platform(&merged, &host, true);
+        assert!(res_fallback.config.tools.contains_key("good_tool"));
+        assert!(!res_fallback.config.tools.contains_key("broken_tool"));
+        assert!(res_fallback.config.tools.contains_key("node"));
+        assert_eq!(
+            res_fallback
+                .config
+                .tools
+                .get("node")
+                .unwrap()
+                .platforms
+                .get("any")
+                .unwrap()
+                .system_path
+                .as_deref(),
+            Some("/bin/lower_node")
+        );
+        assert!(res_fallback.errors.is_empty());
     }
 }

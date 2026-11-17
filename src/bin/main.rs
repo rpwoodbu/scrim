@@ -4,7 +4,7 @@ use fetcher::{cached_binary_path, fetch_tool};
 use linker::create_links;
 use logger::scrim_error;
 use lookup::find_in_path;
-use resolver::{resolve_tool_for_platform, Resolution};
+use resolver::{resolve_tool_for_platform_with_fallback, Resolution};
 use telemetry::report_usage;
 use version::format_version;
 
@@ -82,7 +82,11 @@ fn handle_management_command(args: &[std::ffi::OsString], app_env: &AppEnvironme
         CliParseResult::Command(CliCommand::Version) => {
             println!("{}", format_version(BINARY_COMMIT));
         }
-        CliParseResult::Command(CliCommand::Config { tool, platform }) => {
+        CliParseResult::Command(CliCommand::Config {
+            tool,
+            platform,
+            allow_fallback,
+        }) => {
             let target_platform = match platform {
                 Some(p_str) => match config::Platform::parse(&p_str) {
                     Ok(p) => p,
@@ -100,10 +104,54 @@ fn handle_management_command(args: &[std::ffi::OsString], app_env: &AppEnvironme
                 },
             };
             let config = load_configuration(app_env);
-            match config.format_yaml_for_platform(tool.as_deref(), &target_platform) {
-                Ok(yaml) => print!("{}", yaml),
-                Err(e) => {
-                    scrim_error!("{}", e);
+            if let Some(tool_name) = tool {
+                match resolver::resolve_effective_tool_for_platform(
+                    &tool_name,
+                    &config,
+                    &target_platform,
+                    allow_fallback,
+                ) {
+                    Ok(Some(eff_tool)) => match eff_tool.to_yaml() {
+                        Ok(yaml) => print!("{}", yaml),
+                        Err(e) => {
+                            scrim_error!("Failed to serialize configuration: {}", e);
+                            std::process::exit(1);
+                        }
+                    },
+                    Ok(None) => {
+                        if config.tools.contains_key(&tool_name) {
+                            scrim_error!(
+                                "Tool '{}' is not configured for platform '{}'",
+                                tool_name,
+                                target_platform
+                            );
+                        } else {
+                            scrim_error!("Tool '{}' not found in config", tool_name);
+                        }
+                        std::process::exit(1);
+                    }
+                    Err(e) => {
+                        scrim_error!("{}", e);
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                let res = resolver::resolve_effective_config_for_platform(
+                    &config,
+                    &target_platform,
+                    allow_fallback,
+                );
+                match res.config.to_yaml() {
+                    Ok(yaml) => print!("{}", yaml),
+                    Err(e) => {
+                        scrim_error!("Failed to serialize configuration: {}", e);
+                        std::process::exit(1);
+                    }
+                }
+                if !res.errors.is_empty() {
+                    for err in res.errors {
+                        scrim_error!("{}", err);
+                    }
                     std::process::exit(1);
                 }
             }
@@ -133,11 +181,19 @@ fn handle_management_command(args: &[std::ffi::OsString], app_env: &AppEnvironme
                 }
             }
         }
-        CliParseResult::Command(CliCommand::Run { tool, args }) => {
-            execute_tool(&tool, &args, app_env);
+        CliParseResult::Command(CliCommand::Run {
+            tool,
+            args,
+            allow_fallback,
+        }) => {
+            execute_tool(&tool, &args, allow_fallback, app_env);
         }
-        CliParseResult::Command(CliCommand::Which { tool, platform }) => {
-            which_tool(&tool, platform.as_deref(), app_env);
+        CliParseResult::Command(CliCommand::Which {
+            tool,
+            platform,
+            allow_fallback,
+        }) => {
+            which_tool(&tool, platform.as_deref(), allow_fallback, app_env);
         }
         CliParseResult::Help(text) => {
             print!("{}", text);
@@ -179,7 +235,7 @@ fn proxy_command(program_name: &str, args: &[std::ffi::OsString], app_env: &AppE
         }
     };
     let target_path =
-        resolve_target_binary_path(program_name, &config, &host_platform, app_env, true);
+        resolve_target_binary_path(program_name, &config, &host_platform, app_env, true, false);
     execute_binary(
         program_name,
         &target_path,
@@ -188,7 +244,12 @@ fn proxy_command(program_name: &str, args: &[std::ffi::OsString], app_env: &AppE
     );
 }
 
-fn execute_tool(program_name: &str, tool_args: &[std::ffi::OsString], app_env: &AppEnvironment) -> ! {
+fn execute_tool(
+    program_name: &str,
+    tool_args: &[std::ffi::OsString],
+    allow_fallback: bool,
+    app_env: &AppEnvironment,
+) -> ! {
     let host_platform = match config::Platform::host() {
         Ok(p) => p,
         Err(e) => {
@@ -197,8 +258,14 @@ fn execute_tool(program_name: &str, tool_args: &[std::ffi::OsString], app_env: &
         }
     };
     let config = load_configuration(app_env);
-    let target_path =
-        resolve_target_binary_path(program_name, &config, &host_platform, app_env, true);
+    let target_path = resolve_target_binary_path(
+        program_name,
+        &config,
+        &host_platform,
+        app_env,
+        true,
+        allow_fallback,
+    );
     execute_binary(
         program_name,
         &target_path,
@@ -234,7 +301,12 @@ fn execute_binary(
     std::process::exit(126);
 }
 
-fn which_tool(program_name: &str, platform_arg: Option<&str>, app_env: &AppEnvironment) {
+fn which_tool(
+    program_name: &str,
+    platform_arg: Option<&str>,
+    allow_fallback: bool,
+    app_env: &AppEnvironment,
+) {
     let target_platform = match platform_arg {
         Some(p_str) => match config::Platform::parse(p_str) {
             Ok(p) => p,
@@ -252,8 +324,14 @@ fn which_tool(program_name: &str, platform_arg: Option<&str>, app_env: &AppEnvir
         },
     };
     let config = load_configuration(app_env);
-    let target_path =
-        resolve_target_binary_path(program_name, &config, &target_platform, app_env, false);
+    let target_path = resolve_target_binary_path(
+        program_name,
+        &config,
+        &target_platform,
+        app_env,
+        false,
+        allow_fallback,
+    );
     println!("{}", target_path.display());
 }
 
@@ -263,10 +341,25 @@ fn resolve_target_binary_path(
     platform: &config::Platform,
     app_env: &AppEnvironment,
     fetch_if_missing: bool,
+    allow_fallback: bool,
 ) -> PathBuf {
-    let resolution = match resolve_tool_for_platform(program_name, config, platform) {
+    let resolution = match resolve_tool_for_platform_with_fallback(
+        program_name,
+        config,
+        platform,
+        allow_fallback,
+    ) {
         Ok(Some(res)) => res,
         Ok(None) => {
+            if allow_fallback {
+                if let Some(target_path) = find_in_path(
+                    program_name,
+                    app_env.path.as_deref(),
+                    app_env.current_exe.as_deref(),
+                ) {
+                    return target_path;
+                }
+            }
             if config.tools.contains_key(program_name) {
                 scrim_error!(
                     "Tool '{}' is not configured for platform '{}'",

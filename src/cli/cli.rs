@@ -8,6 +8,7 @@ pub enum CliCommand {
     Config {
         tool: Option<String>,
         platform: Option<String>,
+        allow_fallback: bool,
     },
     Links {
         dir: PathBuf,
@@ -17,10 +18,12 @@ pub enum CliCommand {
     Run {
         tool: String,
         args: Vec<OsString>,
+        allow_fallback: bool,
     },
     Which {
         tool: String,
         platform: Option<String>,
+        allow_fallback: bool,
     },
 }
 
@@ -55,6 +58,12 @@ pub fn build_cli() -> Command {
                         .value_name("PLATFORM")
                         .help("Target platform to evaluate."),
                 )
+                .arg(
+                    Arg::new("allow_fallback")
+                        .long("allow-fallback")
+                        .action(clap::ArgAction::SetTrue)
+                        .help("Fall back to lower-precedence configuration layers if tool configuration is invalid."),
+                )
                 .arg(Arg::new("tool").value_name("TOOL")),
         )
         .subcommand(
@@ -85,6 +94,12 @@ pub fn build_cli() -> Command {
         .subcommand(
             Command::new("run")
                 .about("Runs a defined tool directly without requiring a link.")
+                .arg(
+                    Arg::new("allow_fallback")
+                        .long("allow-fallback")
+                        .action(clap::ArgAction::SetTrue)
+                        .help("Fall back to lower-precedence configuration layers or PATH if tool configuration is invalid."),
+                )
                 .arg(Arg::new("tool").value_name("TOOL"))
                 .arg(
                     Arg::new("args")
@@ -103,6 +118,12 @@ pub fn build_cli() -> Command {
                         .value_name("PLATFORM")
                         .help("Target platform to evaluate."),
                 )
+                .arg(
+                    Arg::new("allow_fallback")
+                        .long("allow-fallback")
+                        .action(clap::ArgAction::SetTrue)
+                        .help("Fall back to lower-precedence configuration layers or PATH if tool configuration is invalid."),
+                )
                 .arg(Arg::new("tool").value_name("TOOL")),
         )
 }
@@ -119,7 +140,12 @@ where
             Some(("config", sub_matches)) => {
                 let tool = sub_matches.get_one::<String>("tool").cloned();
                 let platform = sub_matches.get_one::<String>("platform").cloned();
-                CliParseResult::Command(CliCommand::Config { tool, platform })
+                let allow_fallback = sub_matches.get_flag("allow_fallback");
+                CliParseResult::Command(CliCommand::Config {
+                    tool,
+                    platform,
+                    allow_fallback,
+                })
             }
             Some(("links", sub_matches)) => {
                 let Some(dir) = sub_matches.get_one::<String>("dir").map(PathBuf::from) else {
@@ -141,12 +167,17 @@ where
                         "tool name argument required for run command".to_string(),
                     );
                 };
+                let allow_fallback = sub_matches.get_flag("allow_fallback");
                 let args = sub_matches
                     .get_many::<OsString>("args")
                     .unwrap_or_default()
                     .cloned()
                     .collect();
-                CliParseResult::Command(CliCommand::Run { tool, args })
+                CliParseResult::Command(CliCommand::Run {
+                    tool,
+                    args,
+                    allow_fallback,
+                })
             }
             Some(("which", sub_matches)) => {
                 let Some(tool) = sub_matches.get_one::<String>("tool").cloned() else {
@@ -155,7 +186,12 @@ where
                     );
                 };
                 let platform = sub_matches.get_one::<String>("platform").cloned();
-                CliParseResult::Command(CliCommand::Which { tool, platform })
+                let allow_fallback = sub_matches.get_flag("allow_fallback");
+                CliParseResult::Command(CliCommand::Which {
+                    tool,
+                    platform,
+                    allow_fallback,
+                })
             }
             _ => unreachable!(),
         },
@@ -254,6 +290,15 @@ mod tests {
             CliParseResult::Command(CliCommand::Config {
                 tool: None,
                 platform: None,
+                allow_fallback: false,
+            })
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "config", "--allow-fallback"]),
+            CliParseResult::Command(CliCommand::Config {
+                tool: None,
+                platform: None,
+                allow_fallback: true,
             })
         );
         assert_eq!(
@@ -261,6 +306,15 @@ mod tests {
             CliParseResult::Command(CliCommand::Config {
                 tool: Some("node".to_string()),
                 platform: None,
+                allow_fallback: false,
+            })
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "config", "node", "--allow-fallback"]),
+            CliParseResult::Command(CliCommand::Config {
+                tool: Some("node".to_string()),
+                platform: None,
+                allow_fallback: true,
             })
         );
         assert_eq!(
@@ -268,6 +322,7 @@ mod tests {
             CliParseResult::Command(CliCommand::Config {
                 tool: None,
                 platform: Some("linux-x86_64".to_string()),
+                allow_fallback: false,
             })
         );
         assert_eq!(
@@ -275,6 +330,7 @@ mod tests {
             CliParseResult::Command(CliCommand::Config {
                 tool: None,
                 platform: Some("linux-x86_64".to_string()),
+                allow_fallback: false,
             })
         );
         assert_eq!(
@@ -282,6 +338,7 @@ mod tests {
             CliParseResult::Command(CliCommand::Config {
                 tool: Some("node".to_string()),
                 platform: Some("linux-x86_64".to_string()),
+                allow_fallback: false,
             })
         );
         assert_eq!(
@@ -289,6 +346,7 @@ mod tests {
             CliParseResult::Command(CliCommand::Config {
                 tool: Some("node".to_string()),
                 platform: Some("linux-x86_64".to_string()),
+                allow_fallback: false,
             })
         );
         assert_eq!(
@@ -296,6 +354,7 @@ mod tests {
             CliParseResult::Command(CliCommand::Config {
                 tool: Some("node".to_string()),
                 platform: Some("linux-x86_64".to_string()),
+                allow_fallback: false,
             })
         );
         assert_eq!(
@@ -303,6 +362,7 @@ mod tests {
             CliParseResult::Command(CliCommand::Config {
                 tool: Some("node".to_string()),
                 platform: Some("linux-x86_64".to_string()),
+                allow_fallback: false,
             })
         );
         match parse_management_cli(["scrim", "config", "node", "extra"]) {
@@ -339,6 +399,15 @@ mod tests {
             CliParseResult::Command(CliCommand::Which {
                 tool: "node".to_string(),
                 platform: None,
+                allow_fallback: false,
+            })
+        );
+        assert_eq!(
+            parse_management_cli(["scrim", "which", "--allow-fallback", "node"]),
+            CliParseResult::Command(CliCommand::Which {
+                tool: "node".to_string(),
+                platform: None,
+                allow_fallback: true,
             })
         );
         assert_eq!(
@@ -346,6 +415,7 @@ mod tests {
             CliParseResult::Command(CliCommand::Which {
                 tool: "node".to_string(),
                 platform: Some("linux-x86_64".to_string()),
+                allow_fallback: false,
             })
         );
         assert_eq!(
@@ -353,6 +423,7 @@ mod tests {
             CliParseResult::Command(CliCommand::Which {
                 tool: "node".to_string(),
                 platform: Some("linux-x86_64".to_string()),
+                allow_fallback: false,
             })
         );
         assert_eq!(
@@ -360,6 +431,7 @@ mod tests {
             CliParseResult::Command(CliCommand::Which {
                 tool: "node".to_string(),
                 platform: Some("linux-x86_64".to_string()),
+                allow_fallback: false,
             })
         );
         assert_eq!(
@@ -367,6 +439,7 @@ mod tests {
             CliParseResult::Command(CliCommand::Which {
                 tool: "node".to_string(),
                 platform: Some("linux-x86_64".to_string()),
+                allow_fallback: false,
             })
         );
         assert_eq!(
@@ -507,6 +580,19 @@ mod tests {
             CliParseResult::Command(CliCommand::Run {
                 tool: "node".to_string(),
                 args: vec![OsString::from("index.js"), OsString::from("foo")],
+                allow_fallback: false,
+            })
+        );
+    }
+
+    #[test]
+    fn test_run_subcommand_allow_fallback() {
+        assert_eq!(
+            parse_management_cli(["scrim", "run", "--allow-fallback", "node", "index.js"]),
+            CliParseResult::Command(CliCommand::Run {
+                tool: "node".to_string(),
+                args: vec![OsString::from("index.js")],
+                allow_fallback: true,
             })
         );
     }
@@ -526,6 +612,7 @@ mod tests {
             CliParseResult::Command(CliCommand::Run {
                 tool: "node".to_string(),
                 args: vec![OsString::from("-v"), OsString::from("--flag")],
+                allow_fallback: false,
             })
         );
     }
@@ -537,6 +624,7 @@ mod tests {
             CliParseResult::Command(CliCommand::Run {
                 tool: "node".to_string(),
                 args: vec![OsString::from("-v"), OsString::from("--flag")],
+                allow_fallback: false,
             })
         );
     }
@@ -619,6 +707,7 @@ mod tests {
             CliParseResult::Command(CliCommand::Run {
                 tool: "foo".to_string(),
                 args: vec![OsString::from("-h")],
+                allow_fallback: false,
             })
         );
     }

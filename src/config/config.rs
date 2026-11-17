@@ -87,6 +87,11 @@ pub struct ToolConfig {
     pub sha256: Option<String>,
     #[serde(default, skip_serializing)]
     pub sha512: Option<String>,
+
+    #[serde(skip)]
+    pub fallback: Option<Box<ToolConfig>>,
+    #[serde(skip)]
+    pub desugar_error: Option<String>,
 }
 
 impl ToolConfig {
@@ -168,6 +173,8 @@ impl ToolConfig {
                         url: None,
                         sha256: None,
                         sha512: None,
+                        fallback: None,
+                        desugar_error: None,
                     }))
                 }
                 None => Ok(None),
@@ -181,6 +188,8 @@ impl ToolConfig {
                 url: None,
                 sha256: None,
                 sha512: None,
+                fallback: None,
+                desugar_error: None,
             }))
         } else if self.has_direct_platform_fields() {
             let mut platforms = BTreeMap::new();
@@ -202,13 +211,28 @@ impl ToolConfig {
                 url: None,
                 sha256: None,
                 sha512: None,
+                fallback: None,
+                desugar_error: None,
             }))
         } else {
             Ok(None)
         }
     }
 
+    /// Iterates through this configuration layer and all lower-precedence fallback layers.
+    pub fn layers(&self) -> impl Iterator<Item = &ToolConfig> {
+        std::iter::successors(Some(self), |tc| tc.fallback.as_deref())
+    }
+
+    pub fn to_yaml(&self) -> Result<String, String> {
+        serde_yaml::to_string(self).map_err(|e| format!("Failed to serialize configuration: {}", e))
+    }
+
     pub fn validate(&self, tool_name: &str) -> Result<(), String> {
+        if let Some(ref err) = self.desugar_error {
+            return Err(err.clone());
+        }
+
         // Tool-level archive_path requires url or template
         if self.archive_path.is_some() && self.template.is_none() {
             let has_url = self.platforms.values().any(|p| p.url.is_some()) || self.url.is_some();
@@ -376,7 +400,16 @@ impl Config {
         if let Some(t) = other.telemetry {
             self.telemetry = Some(t);
         }
-        self.tools.extend(other.tools);
+        for (tool_name, mut other_tool) in other.tools {
+            if let Some(prev_tool) = self.tools.remove(&tool_name) {
+                let mut curr = &mut other_tool;
+                while let Some(ref mut next) = curr.fallback {
+                    curr = next;
+                }
+                curr.fallback = Some(Box::new(prev_tool));
+            }
+            self.tools.insert(tool_name, other_tool);
+        }
         self.default_platform = None;
         self
     }
@@ -396,36 +429,8 @@ impl Config {
         })
     }
 
-    pub fn format_yaml_for_platform(
-        &self,
-        tool: Option<&str>,
-        platform: &Platform,
-    ) -> Result<String, String> {
-        if let Some(tool_name) = tool {
-            match self.tools.get(tool_name) {
-                Some(tool_config) => {
-                    let effective = tool_config.effective_for_platform(tool_name, self, platform)?;
-                    match effective {
-                        Some(eff) => serde_yaml::to_string(&eff)
-                            .map_err(|e| format!("Failed to serialize configuration: {}", e)),
-                        None => Err(format!(
-                            "Tool '{}' is not configured for platform '{}'",
-                            tool_name, platform
-                        )),
-                    }
-                }
-                None => Err(format!("Tool '{}' not found in config", tool_name)),
-            }
-        } else {
-            let effective_config = self.effective_for_platform(platform)?;
-            serde_yaml::to_string(&effective_config)
-                .map_err(|e| format!("Failed to serialize configuration: {}", e))
-        }
-    }
-
-    pub fn format_yaml(&self, tool: Option<&str>) -> Result<String, String> {
-        let host = Platform::host()?;
-        self.format_yaml_for_platform(tool, &host)
+    pub fn to_yaml(&self) -> Result<String, String> {
+        serde_yaml::to_string(self).map_err(|e| format!("Failed to serialize configuration: {}", e))
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -452,15 +457,22 @@ pub fn desugar_file_tools(
     file_context: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let default_platform = config.default_platform.take();
-    if let Some(ref dp) = default_platform {
-        Platform::parse(dp).map_err(|e| {
-            if let Some(path) = file_context {
-                format!("Invalid default_platform in '{}': {}", path.display(), e)
-            } else {
-                format!("Invalid default_platform: {}", e)
+    let valid_dp = if let Some(ref dp) = default_platform {
+        match Platform::parse(dp) {
+            Ok(_) => Some(dp.clone()),
+            Err(e) => {
+                let msg = if let Some(path) = file_context {
+                    format!("Invalid default_platform in '{}': {}", path.display(), e)
+                } else {
+                    format!("Invalid default_platform: {}", e)
+                };
+                scrim_warn!("{}. Ignoring default_platform.", msg);
+                None
             }
-        })?;
-    }
+        }
+    } else {
+        None
+    };
 
     for (tool_name, tool_config) in &mut config.tools {
         let has_direct = tool_config.has_direct_platform_fields();
@@ -477,11 +489,9 @@ pub fn desugar_file_tools(
                     tool_name
                 )
             };
-            return Err(msg.into());
-        }
-
-        if has_direct {
-            if let Some(ref dp) = default_platform {
+            tool_config.desugar_error = Some(msg);
+        } else if has_direct {
+            if let Some(ref dp) = valid_dp {
                 let plat_cfg = PlatformToolConfig {
                     system_path: tool_config.system_path.take(),
                     url: tool_config.url.take(),
@@ -503,7 +513,7 @@ pub fn desugar_file_tools(
                         tool_name
                     )
                 };
-                return Err(msg.into());
+                tool_config.desugar_error = Some(msg);
             }
         }
     }
@@ -1123,8 +1133,13 @@ tools:
         )
         .unwrap();
 
-        let err = read_config(&main_import_invalid).unwrap_err();
-        assert!(err.to_string().contains("no 'default_platform' is declared for this file"));
+        let config = read_config(&main_import_invalid).unwrap();
+        // main_tool is valid and desugared
+        assert!(config.tools.get("main_tool").unwrap().validate("main_tool").is_ok());
+        // sub_tool fails validation with actionable error
+        let sub_err = config.tools.get("sub_tool").unwrap().validate("sub_tool").unwrap_err();
+        assert!(sub_err.contains("no 'default_platform' is declared for this file"));
+        assert!(config.validate().unwrap_err().contains("no 'default_platform' is declared for this file"));
 
         // Now sub.yaml has its own default_platform (macos-aarch64)
         let sub_valid = root.path().join("sub_valid.yaml");
@@ -1806,24 +1821,20 @@ tools:
         };
 
         // Full configuration
-        let full_yaml = config.format_yaml(None).unwrap();
+        let full_yaml = config.to_yaml().unwrap();
         assert!(full_yaml.contains("telemetry: true"));
         assert!(full_yaml.contains("node:"));
         assert!(full_yaml.contains("go:"));
         assert!(full_yaml.contains("platforms:"));
 
         // Specific tool configuration
-        let node_yaml = config.format_yaml(Some("node")).unwrap();
+        let node_yaml = config.tools.get("node").unwrap().to_yaml().unwrap();
         assert!(node_yaml.contains("linux-x86_64:"));
         assert!(node_yaml.contains("system_path: /usr/local/bin/node"));
-
-        // Unknown tool error
-        let err = config.format_yaml(Some("nonexistent")).unwrap_err();
-        assert_eq!(err, "Tool 'nonexistent' not found in config");
     }
 
     #[test]
-    fn test_format_yaml_for_platform() {
+    fn test_effective_for_platform() {
         let yaml = r#"
 telemetry: false
 tools:
@@ -1860,7 +1871,8 @@ tools:
         // - go has only linux-x86_64
         // - gofmt is present
         // - macos_only is omitted
-        let linux_yaml = config.format_yaml_for_platform(None, &linux_platform).unwrap();
+        let eff_linux = config.effective_for_platform(&linux_platform).unwrap();
+        let linux_yaml = eff_linux.to_yaml().unwrap();
         assert!(linux_yaml.contains("telemetry: false"));
         assert!(linux_yaml.contains("node:"));
         assert!(linux_yaml.contains("/bin/linux_node"));
@@ -1879,28 +1891,38 @@ tools:
         assert!(gofmt_pos < node_pos);
 
         // 2. Specific tool format for linux:
-        let go_yaml = config.format_yaml_for_platform(Some("go"), &linux_platform).unwrap();
+        let go_eff = config
+            .tools
+            .get("go")
+            .unwrap()
+            .effective_for_platform("go", &config, &linux_platform)
+            .unwrap()
+            .unwrap();
+        let go_yaml = go_eff.to_yaml().unwrap();
         assert!(go_yaml.contains("linux-x86_64:"));
         assert!(go_yaml.contains("linux_hash"));
         assert!(!go_yaml.contains("macos-aarch64:"));
 
-        // 3. Tool not configured for platform error
-        let err = config.format_yaml_for_platform(Some("macos_only"), &linux_platform).unwrap_err();
-        assert_eq!(err, "Tool 'macos_only' is not configured for platform 'linux-x86_64'");
+        // 3. Tool not configured for platform returns Ok(None)
+        let mac_eff = config
+            .tools
+            .get("macos_only")
+            .unwrap()
+            .effective_for_platform("macos_only", &config, &linux_platform)
+            .unwrap();
+        assert!(mac_eff.is_none());
 
-        // 4. Unknown tool error
-        let err2 = config.format_yaml_for_platform(Some("unknown"), &linux_platform).unwrap_err();
-        assert_eq!(err2, "Tool 'unknown' not found in config");
-
-        // 5. Unconfigured platform (linux-aarch64) has empty tools list
-        let empty_yaml = config.format_yaml_for_platform(None, &arm_linux).unwrap();
+        // 4. Unconfigured platform (linux-aarch64) has empty tools list
+        let empty_eff = config.effective_for_platform(&arm_linux).unwrap();
+        let empty_yaml = empty_eff.to_yaml().unwrap();
         assert!(!empty_yaml.contains("node:"));
         assert!(!empty_yaml.contains("go:"));
         assert!(!empty_yaml.contains("gofmt:"));
         assert!(!empty_yaml.contains("macos_only:"));
 
-        // 6. macOS platform full config
-        let mac_yaml = config.format_yaml_for_platform(None, &macos_platform).unwrap();
+        // 5. macOS platform full config
+        let mac_full = config.effective_for_platform(&macos_platform).unwrap();
+        let mac_yaml = mac_full.to_yaml().unwrap();
         assert!(mac_yaml.contains("macos_only:"));
         assert!(mac_yaml.contains("/opt/homebrew/bin/mac_tool"));
         assert!(mac_yaml.contains("mac_hash"));
@@ -2025,5 +2047,90 @@ tools:
 
         let config = read_config(&main_config).expect("Should tolerate syntax error in import");
         assert!(config.tools.contains_key("main_tool"));
+    }
+
+    #[test]
+    fn test_invalid_default_platform_tolerance() {
+        let root = tempdir().unwrap();
+        let config_file = root.path().join("scrim.yaml");
+        fs::write(
+            &config_file,
+            r#"
+default_platform: invalid_os_arch
+tools:
+  explicit_tool:
+    platforms:
+      linux-x86_64:
+        system_path: /bin/explicit
+  direct_tool:
+    system_path: /bin/direct
+"#,
+        )
+        .unwrap();
+
+        let config = read_config(&config_file).expect("Should tolerate invalid default_platform");
+        let linux_platform = Platform::parse("linux-x86_64").unwrap();
+
+        // explicit_tool resolves without error
+        let explicit_eff = config
+            .tools
+            .get("explicit_tool")
+            .unwrap()
+            .effective_for_platform("explicit_tool", &config, &linux_platform);
+        assert!(explicit_eff.is_ok());
+
+        // direct_tool fails validation because default_platform was invalid/ignored
+        let direct_eff = config
+            .tools
+            .get("direct_tool")
+            .unwrap()
+            .effective_for_platform("direct_tool", &config, &linux_platform);
+        assert!(direct_eff.is_err());
+        assert!(direct_eff
+            .unwrap_err()
+            .contains("no 'default_platform' is declared"));
+    }
+
+    #[test]
+    fn test_tool_fallback_layering() {
+        let mut lower = Config::default();
+        let mut lower_tools = BTreeMap::new();
+        lower_tools.insert(
+            "node".to_string(),
+            ToolConfig {
+                system_path: Some("/bin/lower_node".to_string()),
+                ..Default::default()
+            },
+        );
+        lower.tools = lower_tools;
+
+        let mut higher = Config::default();
+        let mut higher_tools = BTreeMap::new();
+        higher_tools.insert(
+            "node".to_string(),
+            ToolConfig {
+                system_path: Some("/bin/higher_node".to_string()),
+                ..Default::default()
+            },
+        );
+        higher.tools = higher_tools;
+
+        let merged = lower.merge(higher);
+        let node_tool = merged.tools.get("node").unwrap();
+        assert_eq!(node_tool.system_path.as_deref(), Some("/bin/higher_node"));
+        assert!(node_tool.fallback.is_some());
+        assert_eq!(
+            node_tool.fallback.as_ref().unwrap().system_path.as_deref(),
+            Some("/bin/lower_node")
+        );
+
+        let layers: Vec<_> = node_tool
+            .layers()
+            .map(|l| l.system_path.as_deref())
+            .collect();
+        assert_eq!(
+            layers,
+            vec![Some("/bin/higher_node"), Some("/bin/lower_node")]
+        );
     }
 }

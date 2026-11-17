@@ -43,16 +43,20 @@ The `scrim config` command reports the effective configuration for a target plat
 
 - **Options**:
   - `--platform <PLATFORM>`: Target platform to evaluate. Defaults to the current host platform.
+  - `--allow-fallback`: Treats semantic configuration errors in higher-precedence layers as attributed warnings on `stderr`, ignores the defective tool definition from that layer, and falls back to lower-precedence configuration layers.
 - **Arguments**: Optional `<TOOL>` (name of the tool whose configuration to report).
 - **Behavior**:
   1. Resolves aggregated configuration across system, user, and workspace layers.
   2. Resolves effective tool definitions for the target platform. Tools not configured for the target platform are omitted when listing all tools.
-  3. If `<TOOL>` is omitted, serializes and prints the effective aggregated configuration in YAML format, with tools sorted in ascending lexicographical order by tool name.
+  3. If `<TOOL>` is omitted:
+     - Serializes and prints the effective aggregated configuration in YAML format for all validly resolved tools, sorted in ascending lexicographical order by tool name.
+     - If any tools encountered semantic errors, Scrim emits attributed error diagnostics for those tools to standard error and exits with a non-zero exit status (`1`) unless `--allow-fallback` is specified. With `--allow-fallback`, defective tool definitions emit attributed warnings to standard error, fall back to lower-precedence layers if available (or are omitted if unconfigured in lower layers), and Scrim exits with status `0`.
   4. If `<TOOL>` is provided:
-     - If `<TOOL>` is not found in the aggregated configuration or is not configured for the target platform, exits with an error.
-     - Otherwise, serializes and prints that tool's effective configuration for the target platform in YAML format (omitting unspecified fields).
+     - Validates `<TOOL>` only. If `<TOOL>` has a semantic configuration error, exits with a non-zero exit status (`1`) and an attributed error diagnostic, unless `--allow-fallback` is specified. With `--allow-fallback`, emits an attributed warning on `stderr` and evaluates the lower-precedence configuration layers for `<TOOL>`.
+     - If `<TOOL>` is not found in the aggregated configuration or is not configured for the target platform, exits with a non-zero exit status (`1`) and an attributed error.
+     - Otherwise, serializes and prints that tool's effective configuration for the target platform in YAML format (omitting unspecified fields) and exits with status `0`.
 - **Error Handling**:
-  - Exits with non-zero status and an attributed error message if `<TOOL>` is not found or not configured for the target platform, if an invalid platform is specified, or if invalid flags or additional arguments are provided.
+  - Exits with non-zero status and an attributed error message if `<TOOL>` is not found, not configured for the target platform, or contains semantic errors (unless `--allow-fallback` is specified and a fallback resolves); if any tool contains semantic errors when `<TOOL>` is omitted (unless `--allow-fallback` is specified); if an invalid platform is specified; or if invalid flags or additional arguments are provided.
 
 #### Links Command (`scrim links [OPTIONS] <DIR>`)
 
@@ -82,14 +86,18 @@ The `scrim links` command creates or updates links in the specified directory `<
     - Exits with status `0` if all links are already correct (no changes would be made).
     - Exits with status `2` if changes would have been made (links to create, or obsolete links to remove when `--prune` is enabled).
   - On error (in either mode): exits with non-zero status (`1`) and an error message if `<DIR>` is omitted, if `<DIR>` does not exist or is not a directory, if the `scrim` executable path cannot be determined, if conflicting files or symlinks prevent link creation, or if filesystem operations fail.
+- **Fault Tolerance**:
+  - Fails immediately with a non-zero exit status (`1`) and an attributed error message if any semantic configuration error exists across the aggregated configuration, making no filesystem changes.
 
-#### Run Command (`scrim run <TOOL> [args...]`)
+#### Run Command (`scrim run [OPTIONS] <TOOL> [args...]`)
 
 The `scrim run` command executes any tool defined in the aggregated configuration directly, without requiring a symlink or hardlink to `scrim`.
 
+- **Options**:
+  - `--allow-fallback`: Treats semantic configuration errors in higher-precedence layers as attributed warnings on `stderr`, ignores the defective tool definition from that layer, and falls back to resolving the tool from lower-precedence configuration layers (or external binaries in PATH if unconfigured in lower layers).
 - **Arguments**: `<TOOL>` (name of the tool to run), followed by any optional arguments `[args...]` to pass through to the executed tool.
 - **Behavior**: Behaves identically to executing a configured tool via a link. Following the convention of tools like `sudo`, `--` is used to delimit the end of `scrim` options; subsequent options and arguments are passed to the command.
-- **Error Handling**: Exits with non-zero status and an attributed error message if `<TOOL>` is omitted, if `<TOOL>` is not found in the configuration, if `<TOOL>` is not configured for the host platform, if invalid flags are passed to `scrim`, or if tool resolution/execution fails.
+- **Error Handling**: Exits with non-zero status and an attributed error message if `<TOOL>` is omitted, if `<TOOL>` is not found in the configuration, if `<TOOL>` is not configured for the host platform, if `<TOOL>` contains semantic errors (unless `--allow-fallback` is specified and a fallback resolves), if invalid flags are passed to `scrim`, or if tool resolution/execution fails.
 
 #### Which Command (`scrim which [OPTIONS] <TOOL>`)
 
@@ -97,9 +105,10 @@ The `scrim which` command outputs the precise absolute path of the binary that w
 
 - **Options**:
   - `--platform <PLATFORM>`: Target platform to evaluate. Defaults to the current host platform.
+  - `--allow-fallback`: Treats semantic configuration errors in higher-precedence layers as attributed warnings on `stderr`, ignores the defective tool definition from that layer, and falls back to resolving the tool from lower-precedence configuration layers (or external binaries in PATH if unconfigured in lower layers).
 - **Arguments**: `<TOOL>` (name of the tool to look up).
 - **Behavior**: Resolves `<TOOL>` for the target platform using Scrim's configuration resolution rules and prints the target executable's absolute path to standard output without executing it or fetching missing tools.
-- **Error Handling**: Exits with non-zero status (`1`) and an attributed error message if `<TOOL>` is omitted, if `<TOOL>` is not found in the aggregated configuration, if `<TOOL>` is not configured for the target platform, or if configuration/resolution validation fails.
+- **Error Handling**: Exits with non-zero status (`1`) and an attributed error message if `<TOOL>` is omitted, if `<TOOL>` is not found in the aggregated configuration, if `<TOOL>` is not configured for the target platform, or if configuration/resolution validation fails (unless `--allow-fallback` is specified and a fallback resolves).
 
 
 
@@ -231,6 +240,9 @@ When a command (e.g., `node`) is invoked, Scrim follows this resolution logic:
       - To enforce the actionable UX principles, Scrim explicitly rejects invalid configurations with clear, attributed error messages rather than silently ignoring properties.
       - **Syntactic Parse Tolerance**: If a configuration file encounters a YAML parse error or read failure (across system, user, and CWD search layers, as well as imported files), Scrim emits an attributed warning to standard error, discards that specific file entirely, and proceeds using lower-precedence configuration layers and remaining imports. This limits the blast radius of defective files in the workspace, allowing proxy shims to remain functional if definitions exist in lower-precedence files or PATH.
       - **Lazy Validation**: Configuration parsing and layering strictly parse and merge configuration structures without eagerly validating all tool definitions. File-scoped desugaring (applying `default_platform`) is processed per-file during configuration loading, while semantic tool validation is evaluated lazily on demand when a specific tool is resolved or executed. For commands requiring full configuration inspection (`scrim links` and `scrim config`), all tools are validated during command execution.
+      - **Semantic Error Isolation**: Semantic configuration errors (such as missing mandatory digests, invalid platform identifiers, mutually exclusive fields, empty configurations, or mixing tool-level platform properties with a `platforms` map) are strictly isolated to the affected tool definition. A semantic defect in tool $A$ MUST NOT invalidate the configuration or prevent another tool $B$ from resolving or executing.
+      - **Global Settings Fault Tolerance**: Semantic errors in global settings (such as an invalid top-level `default_platform` or malformed global options) emit an attributed warning to standard error, ignore the invalid setting, and fall back to the setting's default or lower-precedence layer.
+      - **Principle of Least Surprise for Broken Tools**: If a tool $A$ has a semantic error in a higher-precedence configuration layer, invoking tool $A$ (via proxy shim or `scrim run`) MUST fail fast with an actionable error describing the defect rather than silently falling back to a lower-precedence layer or PATH. Silently falling back would mask configuration mistakes and risk executing an unexpected or incompatible binary. To allow manual recovery or inspection when desired, `scrim run`, `scrim which`, and `scrim config` support the `--allow-fallback` flag to treat such semantic errors as attributed warnings on standard error and fall back to lower-precedence layers (or PATH for `run` and `which`).
       - Specifically, validation enforces:
         1. YAML parsing must be strict: unknown or misspelled fields must be rejected with an error rather than silently ignored. (Such errors cause the file to be discarded with a warning).
         2. `system_path` may be specified alongside fetch-related properties (`url` or `template`, along with `archive_path`). In this mode, `system_path` is preferred if the target executable exists on the system at execution time; if the file at `system_path` does not exist, Scrim falls back to fetching the tool. However, `system_path` cannot be combined with partial fetch definitions (all required fetch properties must still be validly specified).
@@ -340,18 +352,6 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
 - **Regression Prevention**: If a bug is discovered, a dedicated regression test must be written that clearly reproduces and elucidates the bug, ensuring it never returns.
 
 ## Future Work
-- **Fault-Tolerant Configuration Layering & Lazy Evaluation**:
-  - **Motivation**:
-    - In layered configuration environments, particularly where files are discovered dynamically from the working directory, configuration defects have an outsized blast radius. A syntax error or an unrelated tool's semantic flaw can break proxy shims across the user's entire environment (e.g., crippling common developer tools like `git` or `node`).
-    - Furthermore, eagerly validating every declared tool on every invocation wastes cycles on tools that are not being executed.
-    - The overarching intent is to maximize Scrim's resilience against configuration defects without sacrificing predictability when invoking a specific tool.
-  - **Phase 3: Semantic Error Isolation & Management Command Semantics**:
-    - **Per-Tool Semantic Isolation**: Semantic configuration errors (e.g. invalid platform syntax, missing digests, or mutually exclusive properties) are isolated to the specific tool definition. A semantic defect in tool `A` MUST NOT prevent tool `B` from resolving or executing.
-    - **Principle of Least Surprise for Broken Tools**: As an intentional exception to the goal of keeping Scrim functional, if a tool `A` has a semantic error in a higher-precedence configuration layer, invoking tool `A` MUST fail with an actionable error describing the defect rather than falling back to a lower-precedence definition or PATH. Silently falling back would mask configuration mistakes and risk executing an unexpected or incompatible binary. To allow manual recovery or testing when desired, `scrim run` will support an optional flag (e.g. `--ignore-errors` or `--warn-errors`) to treat such semantic errors as warnings and attempt lower-precedence resolution.
-    - **Global Settings**: Semantic errors in global settings (such as invalid `default_platform` or malformed global options) emit an attributed warning to standard error and fall back to the setting's default or lower-precedence layer.
-    - **Management Commands**:
-      - `scrim config [TOOL]`: When run for a specific tool, validates and reports on that tool only. When run without a tool argument, serializes and outputs all validly resolved tools. If any tools encountered semantic errors, it emits error diagnostics for those tools to standard error and exits with a non-zero exit status; if all tools are valid, it exits with status `0`.
-      - `scrim links`: Fails immediately with a non-zero exit status if any semantic error exists across the aggregated configuration, making no filesystem changes.
 - **Cache Management**: Commands to clean or inspect the cache directory.
 - **Home Directory Search Boundary**: Stop upward directory traversal for `scrim.yaml` at `$HOME` to prevent scanning system directories when outside of a repository.
 - **Configurable Telemetry**: Support configuring the telemetry behavior and output destination (rather than hardcoding `/tmp/scrim_telemetry.log`).

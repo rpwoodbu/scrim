@@ -46,6 +46,7 @@ pub fn create_links(
         .into());
     }
 
+    // Step 0: Check for any semantic errors across the aggregated configuration.
     // Fails immediately with a non-zero exit status if any semantic error exists across the aggregated configuration, making no filesystem changes.
     let mut validation_errors = Vec::new();
     for (tool_name, tool_config) in &config.tools {
@@ -652,12 +653,17 @@ mod tests {
 
         let res = create_links(&bin_dir, &scrim_exe, &config, false, false);
         assert!(res.is_err());
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "One or more tool configurations are invalid"
+        );
 
         // Under DESIGN.md, Scrim MUST make NO filesystem changes when validation fails!
         assert!(
             !bin_dir.join("tool_good").exists(),
             "tool_good symlink was created despite configuration validation error"
         );
+        assert!(!bin_dir.join("tool_bad").exists());
     }
 }
 

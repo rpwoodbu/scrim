@@ -3200,6 +3200,500 @@ fn test_syntactic_parse_error_tolerance_in_proxy_invocation() {
     assert!(stderr.contains("[Scrim] Warning: Failed to parse configuration file"));
 }
 
+#[test]
+fn test_semantic_error_isolation_proxy_invocation() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    // 1. Script for good_tool
+    let good_script = temp_path.join("good.sh");
+    fs::write(&good_script, "#!/bin/sh\necho good tool executed\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&good_script).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&good_script, perms).unwrap();
+    }
+
+    // 2. Mock external binary for bad_tool on PATH to verify no accidental fallback
+    let sys_dir = temp_path.join("sys");
+    fs::create_dir_all(&sys_dir).unwrap();
+    let sys_bad = sys_dir.join("bad_tool");
+    fs::write(&sys_bad, "#!/bin/sh\necho bad external\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&sys_bad).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&sys_bad, perms).unwrap();
+    }
+
+    // 3. scrim.yaml with good_tool (valid) and bad_tool (semantic error: url without digest)
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    fs::write(
+        &scrim_yaml,
+        format!(
+            r#"
+tools:
+  good_tool:
+    platforms:
+      linux-x86_64:
+        system_path: {}
+  bad_tool:
+    platforms:
+      linux-x86_64:
+        url: https://example.com/bad.tar.gz
+"#,
+            good_script.display()
+        ),
+    )
+    .unwrap();
+
+    // 4. Create shims for both tools
+    let good_shim = temp_path.join("good_tool");
+    let bad_shim = temp_path.join("bad_tool");
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&scrim_bin, &good_shim).unwrap();
+        std::os::unix::fs::symlink(&scrim_bin, &bad_shim).unwrap();
+    }
+
+    // 5. Invoking good_tool shim MUST succeed despite bad_tool's defect
+    let output_good = Command::new(&good_shim)
+        .current_dir(temp_path)
+        .env("PATH", &sys_dir)
+        .output()
+        .expect("Failed to execute good_tool shim");
+    assert!(output_good.status.success());
+    let stdout_good = String::from_utf8(output_good.stdout).unwrap();
+    assert_eq!(stdout_good.trim(), "good tool executed");
+
+    // 6. Invoking bad_tool shim MUST fail fast with status 1 and actionable error (no fallback to PATH!)
+    let output_bad = Command::new(&bad_shim)
+        .current_dir(temp_path)
+        .env("PATH", &sys_dir)
+        .output()
+        .expect("Failed to execute bad_tool shim");
+    assert_eq!(output_bad.status.code(), Some(1));
+    let stderr_bad = String::from_utf8(output_bad.stderr).unwrap();
+    assert!(stderr_bad.contains("[Scrim] Error: Tool 'bad_tool' specifies 'url' without a digest"));
+}
+
+#[test]
+fn test_scrim_run_allow_fallback_to_lower_layer() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    // 1. Lower layer (parent) defines node validly
+    let parent_script = temp_path.join("parent_node.sh");
+    fs::write(&parent_script, "#!/bin/sh\necho parent node\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&parent_script).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&parent_script, perms).unwrap();
+    }
+    let parent_config = temp_path.join("scrim.yaml");
+    fs::write(
+        &parent_config,
+        format!(
+            r#"
+tools:
+  node:
+    platforms:
+      linux-x86_64:
+        system_path: {}
+"#,
+            parent_script.display()
+        ),
+    )
+    .unwrap();
+
+    // 2. Child directory defines node with a semantic defect (url without digest)
+    let child_dir = temp_path.join("child");
+    fs::create_dir_all(&child_dir).unwrap();
+    let child_config = child_dir.join("scrim.yaml");
+    fs::write(
+        &child_config,
+        r#"
+tools:
+  node:
+    platforms:
+      linux-x86_64:
+        url: https://example.com/broken_node.tar.gz
+"#,
+    )
+    .unwrap();
+
+    // 3. Normal 'scrim run node' fails fast without fallback
+    let output_normal = Command::new(&scrim_bin)
+        .current_dir(&child_dir)
+        .args(["run", "node"])
+        .output()
+        .expect("Failed to run scrim run node");
+    assert_eq!(output_normal.status.code(), Some(1));
+    let stderr_normal = String::from_utf8(output_normal.stderr).unwrap();
+    assert!(stderr_normal.contains("[Scrim] Error: Tool 'node' specifies 'url' without a digest"));
+
+    // 4. 'scrim run --allow-fallback node' warns on stderr and executes parent layer's node!
+    let output_fallback = Command::new(&scrim_bin)
+        .current_dir(&child_dir)
+        .args(["run", "--allow-fallback", "node"])
+        .output()
+        .expect("Failed to run scrim run --allow-fallback node");
+    assert!(output_fallback.status.success());
+    let stdout_fallback = String::from_utf8(output_fallback.stdout).unwrap();
+    assert_eq!(stdout_fallback.trim(), "parent node");
+    let stderr_fallback = String::from_utf8(output_fallback.stderr).unwrap();
+    assert!(stderr_fallback.contains("[Scrim] Warning: Tool 'node' has an invalid configuration"));
+}
+
+#[test]
+fn test_scrim_run_allow_fallback_to_path() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    // 1. External binary on PATH
+    let sys_dir = temp_path.join("sys");
+    fs::create_dir_all(&sys_dir).unwrap();
+    let sys_node = sys_dir.join("node");
+    fs::write(&sys_node, "#!/bin/sh\necho path node\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&sys_node).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&sys_node, perms).unwrap();
+    }
+
+    // 2. Workspace config defines node with semantic error
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    fs::write(
+        &scrim_yaml,
+        r#"
+tools:
+  node:
+    platforms:
+      linux-x86_64:
+        url: https://example.com/broken_node.tar.gz
+"#,
+    )
+    .unwrap();
+
+    // 3. Normal 'scrim run node' fails fast without fallback to PATH
+    let output_normal = Command::new(&scrim_bin)
+        .current_dir(temp_path)
+        .env("PATH", &sys_dir)
+        .args(["run", "node"])
+        .output()
+        .expect("Failed to run scrim run node");
+    assert_eq!(output_normal.status.code(), Some(1));
+    let stderr_normal = String::from_utf8(output_normal.stderr).unwrap();
+    assert!(stderr_normal.contains("[Scrim] Error: Tool 'node' specifies 'url' without a digest"));
+
+    // 4. 'scrim run --allow-fallback node' warns on stderr and executes PATH binary!
+    let output_fallback = Command::new(&scrim_bin)
+        .current_dir(temp_path)
+        .env("PATH", &sys_dir)
+        .args(["run", "--allow-fallback", "node"])
+        .output()
+        .expect("Failed to run scrim run --allow-fallback node");
+    assert!(output_fallback.status.success());
+    let stdout_fallback = String::from_utf8(output_fallback.stdout).unwrap();
+    assert_eq!(stdout_fallback.trim(), "path node");
+    let stderr_fallback = String::from_utf8(output_fallback.stderr).unwrap();
+    assert!(stderr_fallback.contains("[Scrim] Warning: Tool 'node' has an invalid configuration"));
+}
+
+#[test]
+fn test_scrim_which_allow_fallback_to_lower_layer() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    // 1. Parent config defines valid node
+    let parent_config = temp_path.join("scrim.yaml");
+    fs::write(
+        &parent_config,
+        r#"
+tools:
+  node:
+    platforms:
+      linux-x86_64:
+        system_path: /bin/parent_node
+"#,
+    )
+    .unwrap();
+
+    // 2. Child config defines node with a semantic error
+    let child_dir = temp_path.join("child");
+    fs::create_dir_all(&child_dir).unwrap();
+    let child_config = child_dir.join("scrim.yaml");
+    fs::write(
+        &child_config,
+        r#"
+tools:
+  node:
+    platforms:
+      linux-x86_64:
+        url: https://example.com/broken_node.tar.gz
+"#,
+    )
+    .unwrap();
+
+    // 3. Normal 'scrim which node' fails fast without fallback
+    let output_normal = Command::new(&scrim_bin)
+        .current_dir(&child_dir)
+        .args(["which", "node"])
+        .output()
+        .expect("Failed to run scrim which node");
+    assert_eq!(output_normal.status.code(), Some(1));
+    let stderr_normal = String::from_utf8(output_normal.stderr).unwrap();
+    assert!(stderr_normal.contains("[Scrim] Error: Tool 'node' specifies 'url' without a digest"));
+
+    // 4. 'scrim which --allow-fallback node' warns on stderr and prints parent layer's node path
+    let output_fallback = Command::new(&scrim_bin)
+        .current_dir(&child_dir)
+        .args(["which", "--allow-fallback", "node"])
+        .output()
+        .expect("Failed to run scrim which --allow-fallback node");
+    assert!(output_fallback.status.success());
+    let stdout_fallback = String::from_utf8(output_fallback.stdout).unwrap();
+    assert_eq!(stdout_fallback.trim(), "/bin/parent_node");
+    let stderr_fallback = String::from_utf8(output_fallback.stderr).unwrap();
+    assert!(stderr_fallback.contains("[Scrim] Warning: Tool 'node' has an invalid configuration"));
+}
+
+#[test]
+fn test_scrim_which_allow_fallback_to_path() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    // 1. External binary on PATH
+    let sys_dir = temp_path.join("sys");
+    fs::create_dir_all(&sys_dir).unwrap();
+    let sys_node = sys_dir.join("node");
+    fs::write(&sys_node, "#!/bin/sh\necho path node\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&sys_node).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&sys_node, perms).unwrap();
+    }
+
+    // 2. Workspace config defines node with semantic error
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    fs::write(
+        &scrim_yaml,
+        r#"
+tools:
+  node:
+    platforms:
+      linux-x86_64:
+        url: https://example.com/broken_node.tar.gz
+"#,
+    )
+    .unwrap();
+
+    // 3. Normal 'scrim which node' fails fast without fallback to PATH
+    let output_normal = Command::new(&scrim_bin)
+        .current_dir(temp_path)
+        .env("PATH", &sys_dir)
+        .args(["which", "node"])
+        .output()
+        .expect("Failed to run scrim which node");
+    assert_eq!(output_normal.status.code(), Some(1));
+    let stderr_normal = String::from_utf8(output_normal.stderr).unwrap();
+    assert!(stderr_normal.contains("[Scrim] Error: Tool 'node' specifies 'url' without a digest"));
+
+    // 4. 'scrim which --allow-fallback node' warns on stderr and prints PATH binary!
+    let output_fallback = Command::new(&scrim_bin)
+        .current_dir(temp_path)
+        .env("PATH", &sys_dir)
+        .args(["which", "--allow-fallback", "node"])
+        .output()
+        .expect("Failed to run scrim which --allow-fallback node");
+    assert!(output_fallback.status.success());
+    let stdout_fallback = String::from_utf8(output_fallback.stdout).unwrap();
+    assert_eq!(stdout_fallback.trim(), sys_node.to_str().unwrap());
+    let stderr_fallback = String::from_utf8(output_fallback.stderr).unwrap();
+    assert!(stderr_fallback.contains("[Scrim] Warning: Tool 'node' has an invalid configuration"));
+}
+
+#[test]
+fn test_scrim_config_allow_fallback() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    // 1. Parent config defines valid node
+    let parent_config = temp_path.join("scrim.yaml");
+    fs::write(
+        &parent_config,
+        r#"
+tools:
+  node:
+    platforms:
+      linux-x86_64:
+        system_path: /bin/parent_node
+"#,
+    )
+    .unwrap();
+
+    // 2. Child config defines valid good_tool and broken node
+    let child_dir = temp_path.join("child");
+    fs::create_dir_all(&child_dir).unwrap();
+    let child_config = child_dir.join("scrim.yaml");
+    fs::write(
+        &child_config,
+        r#"
+tools:
+  good_tool:
+    platforms:
+      linux-x86_64:
+        system_path: /bin/good
+  node:
+    platforms:
+      linux-x86_64:
+        url: https://example.com/broken_node.tar.gz
+"#,
+    )
+    .unwrap();
+
+    // 3. 'scrim config --allow-fallback node' warns on stderr and outputs parent node's YAML, exiting 0
+    let output_single = Command::new(&scrim_bin)
+        .current_dir(&child_dir)
+        .args(["config", "--allow-fallback", "node"])
+        .output()
+        .expect("Failed to run scrim config --allow-fallback node");
+    assert!(output_single.status.success());
+    let stdout_single = String::from_utf8(output_single.stdout).unwrap();
+    assert!(stdout_single.contains("system_path: /bin/parent_node"));
+    let stderr_single = String::from_utf8(output_single.stderr).unwrap();
+    assert!(stderr_single.contains("[Scrim] Warning: Tool 'node' has an invalid configuration"));
+
+    // 4. 'scrim config --allow-fallback' without arguments: prints good_tool AND fallback node, warns on stderr, exits 0
+    let output_all = Command::new(&scrim_bin)
+        .current_dir(&child_dir)
+        .args(["config", "--allow-fallback"])
+        .output()
+        .expect("Failed to run scrim config --allow-fallback");
+    assert!(output_all.status.success());
+    let stdout_all = String::from_utf8(output_all.stdout).unwrap();
+    assert!(stdout_all.contains("good_tool:"));
+    assert!(stdout_all.contains("node:"));
+    assert!(stdout_all.contains("/bin/parent_node"));
+    let stderr_all = String::from_utf8(output_all.stderr).unwrap();
+    assert!(stderr_all.contains("[Scrim] Warning: Tool 'node' has an invalid configuration"));
+}
+
+#[test]
+fn test_scrim_config_with_semantic_errors() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    // scrim.yaml with good_tool (valid) and bad_tool (broken)
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    fs::write(
+        &scrim_yaml,
+        r#"
+tools:
+  good_tool:
+    platforms:
+      linux-x86_64:
+        system_path: /bin/good
+  bad_tool:
+    platforms:
+      linux-x86_64:
+        url: https://example.com/bad.tar.gz
+"#,
+    )
+    .unwrap();
+
+    // 1. 'scrim config good_tool' succeeds and prints YAML
+    let output_good = Command::new(&scrim_bin)
+        .current_dir(temp_path)
+        .args(["config", "good_tool"])
+        .output()
+        .expect("Failed to run scrim config good_tool");
+    assert!(output_good.status.success());
+    let stdout_good = String::from_utf8(output_good.stdout).unwrap();
+    assert!(stdout_good.contains("system_path: /bin/good"));
+
+    // 2. 'scrim config bad_tool' fails with exit 1 and diagnostic on stderr
+    let output_bad = Command::new(&scrim_bin)
+        .current_dir(temp_path)
+        .args(["config", "bad_tool"])
+        .output()
+        .expect("Failed to run scrim config bad_tool");
+    assert_eq!(output_bad.status.code(), Some(1));
+    let stderr_bad = String::from_utf8(output_bad.stderr).unwrap();
+    assert!(stderr_bad.contains("[Scrim] Error: Tool 'bad_tool' specifies 'url' without a digest"));
+
+    // 3. 'scrim config' without arguments: prints good_tool on stdout, error for bad_tool on stderr, exits 1
+    let output_all = Command::new(&scrim_bin)
+        .current_dir(temp_path)
+        .args(["config"])
+        .output()
+        .expect("Failed to run scrim config");
+    assert_eq!(output_all.status.code(), Some(1));
+    let stdout_all = String::from_utf8(output_all.stdout).unwrap();
+    assert!(stdout_all.contains("good_tool:"));
+    assert!(!stdout_all.contains("bad_tool:"));
+    let stderr_all = String::from_utf8(output_all.stderr).unwrap();
+    assert!(stderr_all.contains("[Scrim] Error: Tool 'bad_tool' specifies 'url' without a digest"));
+}
+
+#[test]
+fn test_scrim_links_aborts_on_semantic_error() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    let target_links_dir = temp_path.join("bin");
+    fs::create_dir_all(&target_links_dir).unwrap();
+
+    // scrim.yaml with good_tool (valid) and bad_tool (broken)
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    fs::write(
+        &scrim_yaml,
+        r#"
+tools:
+  good_tool:
+    platforms:
+      linux-x86_64:
+        system_path: /bin/good
+  bad_tool:
+    platforms:
+      linux-x86_64:
+        url: https://example.com/bad.tar.gz
+"#,
+    )
+    .unwrap();
+
+    // 'scrim links' must fail immediately without creating any links
+    let output = Command::new(&scrim_bin)
+        .current_dir(temp_path)
+        .args(["links", target_links_dir.to_str().unwrap()])
+        .output()
+        .expect("Failed to run scrim links");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("[Scrim] Error: Tool 'bad_tool' specifies 'url' without a digest"));
+
+    // Verify target directory has NO links created
+    assert!(!target_links_dir.join("good_tool").exists());
+    assert!(!target_links_dir.join("bad_tool").exists());
+}
+
 
 
 

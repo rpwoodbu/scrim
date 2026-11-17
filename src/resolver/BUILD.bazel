@@ -12,6 +12,7 @@ rust_library(
     ],
     deps = [
         "//src/config",
+        "//src/logger",
     ],
 )
 
