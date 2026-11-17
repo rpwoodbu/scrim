@@ -46,6 +46,36 @@ pub fn create_links(
         .into());
     }
 
+    // Fails immediately with a non-zero exit status if any semantic error exists across the aggregated configuration, making no filesystem changes.
+    let mut validation_errors = Vec::new();
+    for (tool_name, tool_config) in &config.tools {
+        if let Err(e) = tool_config.validate(tool_name) {
+            validation_errors.push(e);
+        } else if let Some(template_name) = &tool_config.template {
+            if let Some(template_config) = config.tools.get(template_name) {
+                if let Err(e) = template_config.validate(template_name) {
+                    validation_errors.push(e);
+                } else if template_config.template.is_some() {
+                    validation_errors.push(format!(
+                        "Tool '{}' references template '{}', which is also a template. Template chaining is not allowed.",
+                        tool_name, template_name
+                    ));
+                }
+            } else {
+                validation_errors.push(format!(
+                    "Tool '{}' references template '{}', which was not found.",
+                    tool_name, template_name
+                ));
+            }
+        }
+    }
+    if !validation_errors.is_empty() {
+        for err in &validation_errors {
+            scrim_error!("{}", err);
+        }
+        return Err("One or more tool configurations are invalid".into());
+    }
+
     let canonical_target_dir = fs::canonicalize(target_dir).unwrap_or_else(|_| target_dir.to_path_buf());
     let canonical_scrim_exe = fs::canonicalize(scrim_exe).unwrap_or_else(|_| scrim_exe.to_path_buf());
 
@@ -536,6 +566,98 @@ mod tests {
                 let _ = fs::set_permissions(&bin_dir, perms);
             }
         }
+    }
+
+    #[test]
+    fn test_create_links_validates_all_tools_including_non_host() {
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+
+        let scrim_exe = dir.path().join("scrim");
+        fs::write(&scrim_exe, "dummy_scrim").unwrap();
+
+        let mut tools = std::collections::BTreeMap::new();
+        // Valid tool for host platform
+        tools.insert(
+            "tool_a".to_string(),
+            ToolConfig {
+                system_path: Some("/bin/tool_a".to_string()),
+                ..Default::default()
+            },
+        );
+        // Invalid tool for non-host platform (macos-aarch64 has url without digest)
+        let mut non_host_platforms = std::collections::BTreeMap::new();
+        non_host_platforms.insert(
+            "macos-aarch64".to_string(),
+            config::PlatformToolConfig {
+                url: Some("https://example.com/mac.tar.gz".to_string()),
+                ..Default::default()
+            },
+        );
+        tools.insert(
+            "tool_b".to_string(),
+            ToolConfig {
+                platforms: non_host_platforms,
+                ..Default::default()
+            },
+        );
+
+        let config = Config {
+            tools,
+            ..Default::default()
+        };
+
+        let res = create_links(&bin_dir, &scrim_exe, &config, false, false);
+        assert!(
+            res.is_err(),
+            "Expected create_links to fail on non-host tool defect, but it succeeded"
+        );
+        // Verify NO links were created in bin_dir
+        assert!(!bin_dir.join("tool_a").exists());
+        assert!(!bin_dir.join("tool_b").exists());
+    }
+
+    #[test]
+    fn test_create_links_makes_no_filesystem_changes_on_error() {
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+
+        let scrim_exe = dir.path().join("scrim");
+        fs::write(&scrim_exe, "dummy_scrim").unwrap();
+
+        let mut tools = std::collections::BTreeMap::new();
+        // 1. Valid tool on host platform
+        tools.insert(
+            "tool_good".to_string(),
+            ToolConfig {
+                system_path: Some("/bin/tool_good".to_string()),
+                ..Default::default()
+            },
+        );
+        // 2. Invalid tool (missing digest)
+        tools.insert(
+            "tool_bad".to_string(),
+            ToolConfig {
+                url: Some("https://example.com/bad.tar.gz".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let config = Config {
+            tools,
+            ..Default::default()
+        };
+
+        let res = create_links(&bin_dir, &scrim_exe, &config, false, false);
+        assert!(res.is_err());
+
+        // Under DESIGN.md, Scrim MUST make NO filesystem changes when validation fails!
+        assert!(
+            !bin_dir.join("tool_good").exists(),
+            "tool_good symlink was created despite configuration validation error"
+        );
     }
 }
 

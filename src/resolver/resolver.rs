@@ -49,6 +49,8 @@ pub fn resolve_tool_for_platform(
     platform: &config::Platform,
 ) -> Result<Option<Resolution>, String> {
     if let Some(tool_config) = config.tools.get(program_name) {
+        tool_config.validate(program_name)?;
+
         let plat_opt = tool_config.get_platform(platform);
 
         // If the tool has explicit platform blocks and none match the target platform (and no template),
@@ -91,6 +93,7 @@ pub fn resolve_tool_for_platform(
 
         if let Some(template_name) = &tool_config.template {
             if let Some(template_config) = config.tools.get(template_name) {
+                template_config.validate(template_name)?;
                 if template_config.template.is_none() {
                     let template_plat_opt = template_config.get_platform(platform);
                     if !template_config.platforms.is_empty() && template_plat_opt.is_none() {
@@ -592,5 +595,70 @@ tools:
             resolve_tool_for_platform("gofmt", &config, &linux_aarch64),
             Ok(None)
         );
+    }
+
+    #[test]
+    fn test_resolve_tool_validates_platform_syntax() {
+        use config::PlatformToolConfig;
+        let mut tools = BTreeMap::new();
+        let mut platforms = BTreeMap::new();
+        platforms.insert(
+            "bad_platform_name".to_string(),
+            PlatformToolConfig {
+                system_path: Some("/bin/ls".to_string()),
+                ..Default::default()
+            },
+        );
+        tools.insert(
+            "broken_tool".to_string(),
+            ToolConfig {
+                platforms,
+                ..Default::default()
+            },
+        );
+        let config = Config {
+            tools,
+            ..Default::default()
+        };
+        let host = config::Platform::host().unwrap();
+        let result = resolve_tool_for_platform("broken_tool", &config, &host);
+        assert!(
+            result.is_err(),
+            "Expected error for invalid platform syntax, got {:?}",
+            result
+        );
+        assert!(result.unwrap_err().contains("Invalid platform"));
+    }
+
+    #[test]
+    fn test_resolve_tool_validates_referenced_template() {
+        let mut tools = BTreeMap::new();
+        // Template has missing digest (semantic defect)
+        tools.insert(
+            "tmpl".to_string(),
+            ToolConfig {
+                url: Some("https://example.com/tool.tar.gz".to_string()),
+                ..Default::default()
+            },
+        );
+        tools.insert(
+            "app".to_string(),
+            ToolConfig {
+                template: Some("tmpl".to_string()),
+                ..Default::default()
+            },
+        );
+        let config = Config {
+            tools,
+            ..Default::default()
+        };
+        let host = config::Platform::host().unwrap();
+        let result = resolve_tool_for_platform("app", &config, &host);
+        assert!(
+            result.is_err(),
+            "Expected error validating broken template, got {:?}",
+            result
+        );
+        assert!(result.unwrap_err().contains("specifies 'url' without a digest"));
     }
 }

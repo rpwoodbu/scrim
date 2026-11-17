@@ -227,7 +227,10 @@ When a command (e.g., `node`) is invoked, Scrim follows this resolution logic:
     - **Supported Digests**: Scrim supports cryptographic checksums using `sha256` or `sha512`.
     - **Tool Templates**: A tool can specify a `template: <tool_name>` property to inherit the fetch configuration (`url` and configured digest) and `archive_path` of another tool configuration, minimizing repetition and preventing mismatches within toolchains. Template chains are not allowed; a templated entry must directly reference a concrete tool configuration. Template resolution evaluates the referenced tool for the target platform using standard tool resolution rules.
     
-    - **Configuration Validation**: To enforce the actionable UX principles, Scrim will explicitly reject invalid configurations with clear error messages rather than silently ignoring properties. Specifically:
+    - **Configuration Validation & Lazy Evaluation**:
+      - To enforce the actionable UX principles, Scrim explicitly rejects invalid configurations with clear, attributed error messages rather than silently ignoring properties.
+      - **Lazy Validation**: Configuration parsing and layering strictly parse and merge configuration structures without eagerly validating all tool definitions. File-scoped desugaring (applying `default_platform`) is processed per-file during configuration loading, while semantic tool validation is evaluated lazily on demand when a specific tool is resolved or executed. For commands requiring full configuration inspection (`scrim links` and `scrim config`), all tools are validated during command execution.
+      - Specifically, validation enforces:
         1. YAML parsing must be strict: unknown or misspelled fields must be rejected with an error rather than silently ignored.
         2. `system_path` may be specified alongside fetch-related properties (`url` or `template`, along with `archive_path`). In this mode, `system_path` is preferred if the target executable exists on the system at execution time; if the file at `system_path` does not exist, Scrim falls back to fetching the tool. However, `system_path` cannot be combined with partial fetch definitions (all required fetch properties must still be validly specified).
         3. `template` is mutually exclusive with `url` and digests.
@@ -341,10 +344,6 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
     - In layered configuration environments, particularly where files are discovered dynamically from the working directory, configuration defects have an outsized blast radius. A syntax error or an unrelated tool's semantic flaw can break proxy shims across the user's entire environment (e.g., crippling common developer tools like `git` or `node`).
     - Furthermore, eagerly validating every declared tool on every invocation wastes cycles on tools that are not being executed.
     - The overarching intent is to maximize Scrim's resilience against configuration defects without sacrificing predictability when invoking a specific tool.
-  - **Phase 1: Lazy Evaluation Refactor (No Visible Behavior Change)**:
-    - Decouple raw configuration parsing and merging from tool validation and desugaring.
-    - Validate and desugar tool definitions lazily on demand when a specific tool is evaluated or executed, rather than eagerly validating all tools during configuration loading.
-    - Ensure all existing CLI behaviors and validation errors remain strictly identical from the user's perspective.
   - **Phase 2: Syntactic Parse Tolerance**:
     - YAML parse errors in any configuration file (across system, user, and CWD search layers, as well as imported files) are treated as non-fatal warnings: Scrim emits an attributed warning to standard error, discards that specific file entirely, and proceeds using lower-precedence configuration layers and remaining imports.
     - This limits the blast radius of unparseable files in dirty or third-party repositories, allowing Scrim shims to remain functional if definitions exist in lower-precedence files or PATH.

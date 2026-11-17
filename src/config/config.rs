@@ -116,9 +116,12 @@ impl ToolConfig {
         config: &Config,
         platform: &Platform,
     ) -> Result<Option<ToolConfig>, String> {
+        self.validate(tool_name)?;
+
         // If this tool specifies a template, validate the template reference
         if let Some(template_name) = &self.template {
             if let Some(template_config) = config.tools.get(template_name) {
+                template_config.validate(template_name)?;
                 if template_config.template.is_some() {
                     return Err(format!(
                         "Tool '{}' references template '{}', which is also a template. Template chaining is not allowed.",
@@ -205,8 +208,19 @@ impl ToolConfig {
     }
 
     pub fn validate(&self, tool_name: &str) -> Result<(), String> {
+        // Tool-level archive_path requires url or template
+        if self.archive_path.is_some() && self.template.is_none() {
+            let has_url = self.platforms.values().any(|p| p.url.is_some()) || self.url.is_some();
+            if !has_url {
+                return Err(format!(
+                    "Tool '{}' specifies 'archive_path' but provides no 'url' or 'template'.",
+                    tool_name
+                ));
+            }
+        }
+
         // 1. Empty tool configuration
-        if self.template.is_none() && self.platforms.is_empty() {
+        if self.template.is_none() && self.platforms.is_empty() && !self.has_direct_platform_fields() {
             return Err(format!(
                 "Tool '{}' has an empty configuration. Every tool must specify a 'system_path', 'url', or 'template'.",
                 tool_name
@@ -215,11 +229,57 @@ impl ToolConfig {
 
         // 2. Mutually exclusive template with url and digests
         if self.template.is_some() {
+            if self.url.is_some() || self.sha256.is_some() || self.sha512.is_some() {
+                return Err(format!(
+                    "Tool '{}' specifies 'template' which is mutually exclusive with 'url' and digests.",
+                    tool_name
+                ));
+            }
             for plat in self.platforms.values() {
                 if plat.url.is_some() || plat.sha256.is_some() || plat.sha512.is_some() {
                     return Err(format!(
                         "Tool '{}' specifies 'template' which is mutually exclusive with 'url' and digests.",
                         tool_name
+                    ));
+                }
+            }
+        }
+
+        // Direct platform fields validation (for programmatic tool configs)
+        if self.has_direct_platform_fields() {
+            if self.sha256.is_some() && self.sha512.is_some() {
+                return Err(format!(
+                    "Tool '{}' specifies multiple digests. Exactly one digest algorithm must be specified.",
+                    tool_name
+                ));
+            }
+
+            let has_url = self.url.is_some();
+            let has_digest = self.sha256.is_some() || self.sha512.is_some();
+            if has_url != has_digest {
+                if has_url {
+                    return Err(format!(
+                        "Tool '{}' specifies 'url' without a digest. Both must be provided together.",
+                        tool_name
+                    ));
+                } else {
+                    let digest_name = if self.sha256.is_some() {
+                        "sha256"
+                    } else {
+                        "sha512"
+                    };
+                    return Err(format!(
+                        "Tool '{}' specifies '{}' without 'url'. Both must be provided together.",
+                        tool_name, digest_name
+                    ));
+                }
+            }
+
+            if let Some(path) = &self.system_path {
+                if !Path::new(path).is_absolute() {
+                    return Err(format!(
+                        "Tool '{}' specifies relative system_path '{}'. 'system_path' must be an absolute path.",
+                        tool_name, path
                     ));
                 }
             }
@@ -284,17 +344,6 @@ impl ToolConfig {
                 return Err(format!(
                     "Tool '{}' has an empty configuration for platform '{}'. Every platform must specify a 'system_path' or 'url' (or 'archive_path' for templated tools).",
                     tool_name, platform_str
-                ));
-            }
-        }
-
-        // 4. Tool-level archive_path requires url or template
-        if self.archive_path.is_some() && self.template.is_none() {
-            let has_url = self.platforms.values().any(|p| p.url.is_some());
-            if !has_url {
-                return Err(format!(
-                    "Tool '{}' specifies 'archive_path' but provides no 'url' or 'template'.",
-                    tool_name
                 ));
             }
         }
@@ -389,12 +438,15 @@ impl Config {
         let mut parsed: Config = serde_yaml::from_str(yaml_str)
             .map_err(|e| format!("Failed to parse configuration: {}", e))?;
 
-        desugar_and_validate(&mut parsed, None)?;
+        desugar_file_tools(&mut parsed, None)?;
+        parsed
+            .validate()
+            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
         Ok(parsed)
     }
 }
 
-fn desugar_and_validate(
+pub fn desugar_file_tools(
     config: &mut Config,
     file_context: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -454,10 +506,6 @@ fn desugar_and_validate(
             }
         }
     }
-
-    config
-        .validate()
-        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
     Ok(())
 }
@@ -563,7 +611,7 @@ fn read_config_internal(
         )
     })?;
 
-    desugar_and_validate(&mut parsed, Some(path))?;
+    desugar_file_tools(&mut parsed, Some(path))?;
 
     let mut before_config = Config::default();
     let mut after_config = Config::default();
@@ -1846,5 +1894,67 @@ tools:
         assert!(mac_yaml.contains("/opt/homebrew/bin/mac_tool"));
         assert!(mac_yaml.contains("mac_hash"));
         assert!(!mac_yaml.contains("linux_hash"));
+    }
+
+    #[test]
+    fn test_lazy_validation_deferred_until_evaluation() {
+        let root = tempdir().unwrap();
+        // A config with one valid tool and one semantically invalid tool (e.g. url without digest)
+        let config_file = root.path().join("scrim.yaml");
+        fs::write(
+            &config_file,
+            r#"
+tools:
+  valid_tool:
+    platforms:
+      linux-x86_64:
+        system_path: /bin/valid
+  broken_tool:
+    platforms:
+      linux-x86_64:
+        url: https://example.com/tool.tar.gz
+"#,
+        )
+        .unwrap();
+
+        // Loading the config succeeds because validation is deferred
+        let config = read_config(&config_file).expect("Loading config should succeed lazily");
+        assert!(config.tools.contains_key("valid_tool"));
+        assert!(config.tools.contains_key("broken_tool"));
+
+        let linux_platform = Platform::parse("linux-x86_64").unwrap();
+
+        // Evaluating valid_tool succeeds
+        let valid_eff = config
+            .tools
+            .get("valid_tool")
+            .unwrap()
+            .effective_for_platform("valid_tool", &config, &linux_platform);
+        assert!(valid_eff.is_ok());
+
+        // Evaluating broken_tool fails with semantic validation error
+        let broken_eff = config
+            .tools
+            .get("broken_tool")
+            .unwrap()
+            .effective_for_platform("broken_tool", &config, &linux_platform);
+        assert!(broken_eff.is_err());
+        assert!(broken_eff
+            .unwrap_err()
+            .contains("specifies 'url' without a digest"));
+    }
+
+    #[test]
+    fn test_validate_direct_platform_fields_with_archive_path() {
+        let tool = ToolConfig {
+            url: Some("https://example.com/tool.tar.gz".to_string()),
+            sha256: Some("abc".to_string()),
+            archive_path: Some("bin/tool".to_string()),
+            ..Default::default()
+        };
+        assert!(
+            tool.validate("mytool").is_ok(),
+            "Expected tool with direct url, sha256, and archive_path to validate"
+        );
     }
 }
