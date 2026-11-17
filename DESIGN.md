@@ -336,6 +336,25 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
 - **Regression Prevention**: If a bug is discovered, a dedicated regression test must be written that clearly reproduces and elucidates the bug, ensuring it never returns.
 
 ## Future Work
+- **Fault-Tolerant Configuration Layering & Lazy Evaluation**:
+  - **Motivation**:
+    - In layered configuration environments, particularly where files are discovered dynamically from the working directory, configuration defects have an outsized blast radius. A syntax error or an unrelated tool's semantic flaw can break proxy shims across the user's entire environment (e.g., crippling common developer tools like `git` or `node`).
+    - Furthermore, eagerly validating every declared tool on every invocation wastes cycles on tools that are not being executed.
+    - The overarching intent is to maximize Scrim's resilience against configuration defects without sacrificing predictability when invoking a specific tool.
+  - **Phase 1: Lazy Evaluation Refactor (No Visible Behavior Change)**:
+    - Decouple raw configuration parsing and merging from tool validation and desugaring.
+    - Validate and desugar tool definitions lazily on demand when a specific tool is evaluated or executed, rather than eagerly validating all tools during configuration loading.
+    - Ensure all existing CLI behaviors and validation errors remain strictly identical from the user's perspective.
+  - **Phase 2: Syntactic Parse Tolerance**:
+    - YAML parse errors in any configuration file (across system, user, and CWD search layers, as well as imported files) are treated as non-fatal warnings: Scrim emits an attributed warning to standard error, discards that specific file entirely, and proceeds using lower-precedence configuration layers and remaining imports.
+    - This limits the blast radius of unparseable files in dirty or third-party repositories, allowing Scrim shims to remain functional if definitions exist in lower-precedence files or PATH.
+  - **Phase 3: Semantic Error Isolation & Management Command Semantics**:
+    - **Per-Tool Semantic Isolation**: Semantic configuration errors (e.g. invalid platform syntax, missing digests, or mutually exclusive properties) are isolated to the specific tool definition. A semantic defect in tool `A` MUST NOT prevent tool `B` from resolving or executing.
+    - **Principle of Least Surprise for Broken Tools**: As an intentional exception to the goal of keeping Scrim functional, if a tool `A` has a semantic error in a higher-precedence configuration layer, invoking tool `A` MUST fail with an actionable error describing the defect rather than falling back to a lower-precedence definition or PATH. Silently falling back would mask configuration mistakes and risk executing an unexpected or incompatible binary. To allow manual recovery or testing when desired, `scrim run` will support an optional flag (e.g. `--ignore-errors` or `--warn-errors`) to treat such semantic errors as warnings and attempt lower-precedence resolution.
+    - **Global Settings**: Semantic errors in global settings (such as invalid `default_platform` or malformed global options) emit an attributed warning to standard error and fall back to the setting's default or lower-precedence layer.
+    - **Management Commands**:
+      - `scrim config [TOOL]`: When run for a specific tool, validates and reports on that tool only. When run without a tool argument, serializes and outputs all validly resolved tools. If any tools encountered semantic errors, it emits error diagnostics for those tools to standard error and exits with a non-zero exit status; if all tools are valid, it exits with status `0`.
+      - `scrim links`: Fails immediately with a non-zero exit status if any semantic error exists across the aggregated configuration, making no filesystem changes.
 - **Cache Management**: Commands to clean or inspect the cache directory.
 - **Home Directory Search Boundary**: Stop upward directory traversal for `scrim.yaml` at `$HOME` to prevent scanning system directories when outside of a repository.
 - **Configurable Telemetry**: Support configuring the telemetry behavior and output destination (rather than hardcoding `/tmp/scrim_telemetry.log`).
