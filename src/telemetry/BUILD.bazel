@@ -14,8 +14,10 @@ rust_library(
 
 rust_test(
     name = "telemetry_test",
-    crate = ":telemetry",
+    srcs = ["telemetry_test.rs"],
+    edition = "2021",
     deps = [
+        ":telemetry",
         "@crates//:tempfile",
     ],
 )

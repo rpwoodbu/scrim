@@ -17,8 +17,10 @@ rust_library(
 
 rust_test(
     name = "fetcher_test",
-    crate = ":fetcher",
+    srcs = ["fetcher_test.rs"],
+    edition = "2021",
     deps = [
+        ":fetcher",
         "@crates//:flate2",
         "@crates//:sha2",
         "@crates//:tar",
@@ -43,10 +45,16 @@ rust_library(
 
 rust_test(
     name = "archive_test",
-    crate = ":archive",
+    srcs = ["archive_test.rs"],
+    edition = "2021",
     deps = [
+        ":archive",
         "//tests:test_helpers",
+        "@crates//:flate2",
+        "@crates//:lzma-rs",
+        "@crates//:tar",
         "@crates//:tempfile",
+        "@crates//:zip",
     ],
 )
 
@@ -62,7 +70,12 @@ rust_library(
 
 rust_test(
     name = "hashing_test",
-    crate = ":hashing",
+    srcs = ["hashing_test.rs"],
+    edition = "2021",
+    deps = [
+        ":hashing",
+        "@crates//:sha2",
+    ],
 )
 
 rust_library(
@@ -78,8 +91,10 @@ rust_library(
 
 rust_test(
     name = "appimage_test",
-    crate = ":appimage",
+    srcs = ["appimage_test.rs"],
+    edition = "2021",
     deps = [
+        ":appimage",
         "//tests:test_helpers",
         "@crates//:tempfile",
     ],
@@ -94,8 +109,10 @@ rust_library(
 
 rust_test(
     name = "elf_test",
-    crate = ":elf",
+    srcs = ["elf_test.rs"],
+    edition = "2021",
     deps = [
+        ":elf",
         "//tests:test_helpers",
     ],
 )

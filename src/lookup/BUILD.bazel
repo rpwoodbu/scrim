@@ -10,8 +10,10 @@ rust_library(
 
 rust_test(
     name = "lookup_test",
-    crate = ":lookup",
+    srcs = ["lookup_test.rs"],
+    edition = "2021",
     deps = [
+        ":lookup",
         "@crates//:tempfile",
     ],
 )

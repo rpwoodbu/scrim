@@ -18,5 +18,10 @@ rust_library(
 
 rust_test(
     name = "resolver_test",
-    crate = ":resolver",
+    srcs = ["resolver_test.rs"],
+    edition = "2021",
+    deps = [
+        ":resolver",
+        "//src/config",
+    ],
 )

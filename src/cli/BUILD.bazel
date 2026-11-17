@@ -14,5 +14,9 @@ rust_library(
 
 rust_test(
     name = "cli_test",
-    crate = ":cli",
+    srcs = ["cli_test.rs"],
+    edition = "2021",
+    deps = [
+        ":cli",
+    ],
 )

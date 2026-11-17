@@ -15,8 +15,11 @@ rust_library(
 
 rust_test(
     name = "linker_test",
-    crate = ":linker",
+    srcs = ["linker_test.rs"],
+    edition = "2021",
     deps = [
+        ":linker",
+        "//src/config",
         "@crates//:tempfile",
     ],
 )

@@ -340,7 +340,7 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
 - Benchmarks will be integrated into the Bazel build pipeline.
 
 ### Testing Strategy
-- **Unit Tests**: Every core module must have high test coverage, maintained via localized unit tests within each package.
+- **Unit Tests**: Every core module must have high test coverage, maintained via localized unit tests within each package. Unit tests MUST live in separate `*_test.rs` source files (following Bazel naming conventions) and be declared as standalone `rust_test` targets using `srcs` rather than inline `#[cfg(test)]` modules inside production source files.
 - **Integration Tests**: Bazel `sh_test` or `rust_test` targets that simulate:
     - Deeply nested project structures.
     - Missing configurations (falling back to global defaults).

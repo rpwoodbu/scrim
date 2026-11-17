@@ -51,8 +51,11 @@ rust_library(
 
 rust_test(
     name = "test_helpers_test",
-    crate = ":test_helpers",
+    srcs = ["test_helpers_test.rs"],
+    edition = "2021",
     deps = [
+        ":test_helpers",
+        "@crates//:backhand",
         "@crates//:tempfile",
     ],
 )
