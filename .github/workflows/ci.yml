@@ -32,11 +32,9 @@ jobs:
         run: |
           bazel build -c opt --stamp --config=linux-x86_64 --remote_download_toplevel //src/bin:scrim
           cp bazel-bin/src/bin/scrim scrim-linux-x86_64
-          chmod +x scrim-linux-x86_64
 
           bazel build -c opt --stamp --config=linux-aarch64 --remote_download_toplevel //src/bin:scrim
           cp bazel-bin/src/bin/scrim scrim-linux-aarch64
-          chmod +x scrim-linux-aarch64
 
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
