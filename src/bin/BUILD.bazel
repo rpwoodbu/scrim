@@ -23,5 +23,6 @@ rust_binary(
         "//src/resolver",
         "//src/telemetry",
         "//src/version",
+        "@crates//:dlmalloc",
     ],
 )

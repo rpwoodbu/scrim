@@ -13,6 +13,12 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+// Replace musl's default allocator (mallocng) with dlmalloc to avoid mmap/munmap
+// syscall churn during configuration parsing on process startup.
+#[cfg(target_env = "musl")]
+#[global_allocator]
+static GLOBAL: dlmalloc::GlobalDlmalloc = dlmalloc::GlobalDlmalloc;
+
 fn main() {
     let args: Vec<std::ffi::OsString> = env::args_os().collect();
     if args.is_empty() {

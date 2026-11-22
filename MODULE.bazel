@@ -84,6 +84,11 @@ crate.spec(
     package = "backhand",
     version = "0.25",
 )
+crate.spec(
+    features = ["global"],
+    package = "dlmalloc",
+    version = "0.2",
+)
 crate.from_specs()
 use_repo(crate, "crates")
 
