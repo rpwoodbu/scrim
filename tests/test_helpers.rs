@@ -17,6 +17,16 @@ pub fn find_runfile_bin(pkg_rel_path: &str, bin_name: &str) -> PathBuf {
         }
     }
     if let Ok(current_exe) = env::current_exe() {
+        if let Some(exe_name) = current_exe.file_name().and_then(|s| s.to_str()) {
+            let sibling_runfiles = current_exe
+                .with_file_name(format!("{}.runfiles", exe_name))
+                .join("_main")
+                .join(pkg_rel_path)
+                .join(bin_name);
+            if sibling_runfiles.exists() {
+                return sibling_runfiles;
+            }
+        }
         if let Some(dir) = current_exe.parent() {
             let path = dir.join(bin_name);
             if path.exists() {

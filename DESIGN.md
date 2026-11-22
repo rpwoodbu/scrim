@@ -352,14 +352,21 @@ The project enforces the following prescriptive layout:
 Performance is a primary design goal. To ensure Scrim remains thin and fast, we will implement rigorous performance monitoring.
 
 ### Performance Thresholds
-- **Hot Path Overhead**: The time added by Scrim when a tool is already resolved (no fetch required) should be **< 2ms**. This ensures that even when tools are called in rapid succession by scripts, the cumulative overhead remains negligible.
+- **Hot Path Overhead**: The net time added by Scrim (above executing the target binary directly) when a tool is already resolved (no fetch required) should be **< 2ms** on a realistic 50-tool configuration on an unthrottled CPU. This ensures that when tools are called in rapid, repeated succession (such as during builds), the cumulative overhead remains negligible.
 
 ### Microbenchmarks
-- We will use `criterion` or a similar Rust benchmarking suite to measure:
-    - Config resolution time (searching parent directories).
-    - Parsing time for the configuration file.
-    - End-to-End (E2E) hot path shim overhead (exercising the full proxy flow).
-- Benchmarks will be integrated into the Bazel build pipeline.
+- We use `criterion` to measure both isolated subsystems and End-to-End (E2E) hot-path proxy overhead:
+    - **Config resolution (`config_resolution`)**: Layered discovery across user config (with `imports`), upward workspace search stopping at a `.git` boundary, and merging.
+    - **Config parsing (`config_parsing_minimal`, `config_parsing_realistic`)**: YAML deserialization and file-scoped normalization for both a minimal (2-tool) config and a realistic 50-tool multi-platform config, exercising the release allocator behavior.
+    - **Tool resolution (`resolve_tool`)**: Resolving a templated tool across a multi-platform configuration.
+    - **E2E minimal shim overhead (`e2e_shim_minimal`)**: Net time added by Scrim proxying `/bin/true` via a 1-tool `system_path` configuration with telemetry disabled (baseline shim floor).
+    - **E2E realistic shim overhead (`e2e_shim_realistic`)**: Net time added by Scrim proxying a cached fetched binary (`/bin/true` copy + verified `.url` file) resolved via a `template` across layered user + imported (50-tool) + nested workspace configs with a `.git` boundary and **file telemetry enabled** (writing to an isolated temporary log file, verifying telemetry does not regress hot-path latency).
+- **Measurement Methodology & Isolation**:
+    - E2E benchmarks measure **net added overhead** (`shim - direct`) using paired, interleaved executions inside Criterion's `iter_custom` (alternating direct `/bin/true` and shim runs within each measurement batch, alternating execution order across iterations, and accumulating `shim_duration - direct_duration`). This cancels process-spawn baseline cost and prevents CPU frequency or load drift between baseline and shim measurements.
+    - All benchmarks run in isolated temporary environments with explicit `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `XDG_STATE_HOME`, and `.git` boundaries so host configuration, caches, and telemetry logs never influence results or leak outside the fixture.
+- **Release-Representative Build**:
+    - Benchmarks and performance validation MUST execute against an optimized (`-c opt`), statically linked `musl` build (`//:musl_host`) matching Linux release binaries, rather than `fastbuild` or `glibc`. This is enforced automatically in Bazel via a build configuration transition on the benchmark binary dependency of the performance validation test, while keeping standard unit and integration tests fast under default test settings.
+- Benchmarks are integrated into the Bazel build pipeline.
 
 ### Testing Strategy
 - **Unit Tests**: Every core module must have high test coverage, maintained via localized unit tests within each package. Unit tests MUST live in separate `*_test.rs` source files (following Bazel naming conventions) and be declared as standalone `rust_test` targets using `srcs` rather than inline `#[cfg(test)]` modules inside production source files.
@@ -368,7 +375,7 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
     - Missing configurations (falling back to global defaults).
     - Failed fetches and fallback behavior.
 - **Telemetry Validation**: Tests to ensure that telemetry failure never impacts the main execution flow.
-- **Performance Threshold Validation**: There must be a separate "manual" test target (tagged `manual` and `exclusive` to ensure isolated execution without noise from concurrent actions) which will run the benchmarks such that they generate proper data and will automatically fail if the required performance thresholds (e.g., < 2ms overhead) are not met.
+- **Performance Threshold Validation**: There must be a separate "manual" test target (tagged `manual` and `exclusive` to ensure isolated execution without noise from concurrent actions) which builds and runs the `criterion` benchmark suite in `-c opt` static `musl` mode, prints a summary of all benchmark results (`median` and `mean`), and automatically fails if the median net added overhead of `e2e_shim_realistic` exceeds the `< 2ms` threshold.
 
 ### Bug Regression Testing
 - **Regression Prevention**: If a bug is discovered, a dedicated regression test must be written that clearly reproduces and elucidates the bug, ensuring it never returns.

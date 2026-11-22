@@ -1,7 +1,8 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary")
+load(":transitions.bzl", "opt_musl_binary")
 
 rust_binary(
-    name = "scrim_bench",
+    name = "scrim_bench_bin",
     testonly = True,
     srcs = ["bench.rs"],
     edition = "2021",
@@ -9,7 +10,6 @@ rust_binary(
         "@llvm//platforms/config:musl": ["-C", "relocation-model=static"],
         "//conditions:default": [],
     }),
-    visibility = ["//visibility:public"],
     data = ["//src/bin:scrim"],
     deps = [
         "//src/config",
@@ -18,4 +18,11 @@ rust_binary(
         "@crates//:criterion",
         "@crates//:tempfile",
     ],
+)
+
+opt_musl_binary(
+    name = "scrim_bench",
+    testonly = True,
+    target = ":scrim_bench_bin",
+    visibility = ["//visibility:public"],
 )
