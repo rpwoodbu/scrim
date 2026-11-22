@@ -4,7 +4,7 @@ You MUST read and understand the `DESIGN.md` file before proceeding with any tas
 ### Review Process
 All changes MUST receive explicit human review BEFORE they are committed. You MUST review your own work, consult these guidelines, and ensure they have not been violated before seeking human review.
 
-When participating in a design discussion, you MUST first propose changes to `DESIGN.md` and explicitly ask the user for review. You MUST NOT proceed to make any code changes until the user (a human) has explicitly reviewed and approved the design changes in `DESIGN.md`.
+When participating in a design discussion or proposing design changes, you MUST edit `DESIGN.md` directly with the proposed changes and ask the user to review the file itself; NEVER ask the user to review design proposals printed in conversation. You MUST NOT proceed to make any code changes until the user (a human) has explicitly reviewed and approved the design changes in `DESIGN.md`.
 
 ### Repository Hygiene
 Keep the history clean. Follow these rules to achieve this:
