@@ -142,7 +142,7 @@ pub fn resolve_effective_config_for_platform(
     EffectiveConfigResolution {
         config: Config {
             default_platform: None,
-            telemetry: config.telemetry,
+            telemetry: config.telemetry.clone(),
             imports: Vec::new(),
             tools: effective_tools,
         },

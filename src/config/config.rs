@@ -377,14 +377,280 @@ impl ToolConfig {
     }
 }
 
+struct StrictString(String);
+
+impl<'de> Deserialize<'de> for StrictString {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct StrictStringVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for StrictStringVisitor {
+            type Value = StrictString;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a string")
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(StrictString(v.to_string()))
+            }
+
+            fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(StrictString(v))
+            }
+        }
+
+        deserializer.deserialize_any(StrictStringVisitor)
+    }
+}
+
+#[serde_with::skip_serializing_none]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct FileTelemetryConfig {
+    pub path: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for FileTelemetryConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct FileTelemetryVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for FileTelemetryVisitor {
+            type Value = FileTelemetryConfig;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a file telemetry object or path string")
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(FileTelemetryConfig {
+                    path: Some(v.to_string()),
+                })
+            }
+
+            fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(FileTelemetryConfig { path: Some(v) })
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut path: Option<String> = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "path" => {
+                            if path.is_some() {
+                                return Err(serde::de::Error::duplicate_field("path"));
+                            }
+                            path = Some(map.next_value::<StrictString>()?.0);
+                        }
+                        other => {
+                            return Err(serde::de::Error::unknown_field(other, &["path"]));
+                        }
+                    }
+                }
+                Ok(FileTelemetryConfig { path })
+            }
+        }
+
+        deserializer.deserialize_any(FileTelemetryVisitor)
+    }
+}
+
+fn deserialize_file_sinks<'de, D>(deserializer: D) -> Result<Vec<FileTelemetryConfig>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct FileSinksVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for FileSinksVisitor {
+        type Value = Vec<FileTelemetryConfig>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a file telemetry sink or sequence of file telemetry sinks")
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(vec![FileTelemetryConfig {
+                path: Some(v.to_string()),
+            }])
+        }
+
+        fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(vec![FileTelemetryConfig { path: Some(v) }])
+        }
+
+        fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::MapAccess<'de>,
+        {
+            let sink = FileTelemetryConfig::deserialize(
+                serde::de::value::MapAccessDeserializer::new(map),
+            )?;
+            Ok(vec![sink])
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>,
+        {
+            let mut sinks = Vec::new();
+            while let Some(item) = seq.next_element::<FileTelemetryConfig>()? {
+                sinks.push(item);
+            }
+            Ok(sinks)
+        }
+    }
+
+    deserializer.deserialize_any(FileSinksVisitor)
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct TelemetryConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub file: Vec<FileTelemetryConfig>,
+}
+
+impl TelemetryConfig {
+    pub fn is_empty(&self) -> bool {
+        self.file.is_empty()
+    }
+
+    /// Merges telemetry sinks additively while preserving order and deduplicating identical entries.
+    pub fn merge(&mut self, other: TelemetryConfig) {
+        for sink in other.file {
+            if !self.file.contains(&sink) {
+                self.file.push(sink);
+            }
+        }
+    }
+
+    /// Resolves configured file sinks to unique output paths, defaulting omitted paths to the XDG state log.
+    pub fn resolve_file_paths(
+        &self,
+        xdg_state_env: Option<&Path>,
+        home_dir: Option<&Path>,
+    ) -> Vec<PathBuf> {
+        if self.file.is_empty() {
+            return Vec::new();
+        }
+        let mut default_path: Option<PathBuf> = None;
+        let mut paths = Vec::with_capacity(self.file.len());
+        for sink in &self.file {
+            let resolved = match &sink.path {
+                Some(p) => PathBuf::from(p),
+                None => default_path
+                    .get_or_insert_with(|| {
+                        resolve_default_telemetry_log_path(xdg_state_env, home_dir)
+                    })
+                    .clone(),
+            };
+            if !paths.contains(&resolved) {
+                paths.push(resolved);
+            }
+        }
+        paths
+    }
+}
+
+impl<'de> Deserialize<'de> for TelemetryConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct FileSinks(Vec<FileTelemetryConfig>);
+
+        impl<'de> Deserialize<'de> for FileSinks {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                deserialize_file_sinks(deserializer).map(FileSinks)
+            }
+        }
+
+        struct TelemetryConfigVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for TelemetryConfigVisitor {
+            type Value = TelemetryConfig;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a telemetry configuration mapping or boolean")
+            }
+
+            fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                // Legacy boolean shorthand (deprecated): true maps to default XDG file sink, false is a no-op.
+                if v {
+                    Ok(TelemetryConfig {
+                        file: vec![FileTelemetryConfig { path: None }],
+                    })
+                } else {
+                    Ok(TelemetryConfig::default())
+                }
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut file: Option<Vec<FileTelemetryConfig>> = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "file" => {
+                            if file.is_some() {
+                                return Err(serde::de::Error::duplicate_field("file"));
+                            }
+                            file = Some(map.next_value::<FileSinks>()?.0);
+                        }
+                        other => {
+                            return Err(serde::de::Error::unknown_field(other, &["file"]));
+                        }
+                    }
+                }
+                Ok(TelemetryConfig {
+                    file: file.unwrap_or_default(),
+                })
+            }
+        }
+
+        deserializer.deserialize_any(TelemetryConfigVisitor)
+    }
+}
+
 #[serde_with::skip_serializing_none]
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default, skip_serializing)]
     pub default_platform: Option<String>,
-    #[serde(default)]
-    pub telemetry: Option<bool>,
+    #[serde(default, skip_serializing_if = "TelemetryConfig::is_empty")]
+    pub telemetry: TelemetryConfig,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub imports: Vec<ImportEntry>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -393,13 +659,11 @@ pub struct Config {
 
 impl Config {
     pub fn telemetry_enabled(&self) -> bool {
-        self.telemetry.unwrap_or(false)
+        !self.telemetry.is_empty()
     }
 
     pub fn merge(mut self, other: Config) -> Self {
-        if let Some(t) = other.telemetry {
-            self.telemetry = Some(t);
-        }
+        self.telemetry.merge(other.telemetry);
         for (tool_name, mut other_tool) in other.tools {
             if let Some(prev_tool) = self.tools.remove(&tool_name) {
                 let mut curr = &mut other_tool;
@@ -423,7 +687,7 @@ impl Config {
         }
         Ok(Config {
             default_platform: None,
-            telemetry: self.telemetry,
+            telemetry: self.telemetry.clone(),
             imports: Vec::new(),
             tools: effective_tools,
         })
@@ -452,10 +716,40 @@ impl Config {
     }
 }
 
+fn sanitize_telemetry(telemetry: &mut TelemetryConfig, file_context: Option<&Path>) {
+    let mut sanitized_file_sinks = Vec::with_capacity(telemetry.file.len());
+    for sink in std::mem::take(&mut telemetry.file) {
+        if let Some(ref p) = sink.path {
+            if p.is_empty() || !Path::new(p).is_absolute() {
+                let msg = if let Some(path) = file_context {
+                    format!(
+                        "Invalid telemetry file path '{}' in '{}': 'path' must be a non-empty absolute path",
+                        p,
+                        path.display()
+                    )
+                } else {
+                    format!(
+                        "Invalid telemetry file path '{}': 'path' must be a non-empty absolute path",
+                        p
+                    )
+                };
+                scrim_warn!("{}. Ignoring telemetry sink.", msg);
+                continue;
+            }
+        }
+        if !sanitized_file_sinks.contains(&sink) {
+            sanitized_file_sinks.push(sink);
+        }
+    }
+    telemetry.file = sanitized_file_sinks;
+}
+
 pub fn desugar_file_tools(
     config: &mut Config,
     file_context: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    sanitize_telemetry(&mut config.telemetry, file_context);
+
     let default_platform = config.default_platform.take();
     let valid_dp = if let Some(ref dp) = default_platform {
         match Platform::parse(dp) {
@@ -709,5 +1003,19 @@ pub fn resolve_cache_dir(
     home_dir: Option<&Path>,
 ) -> PathBuf {
     resolve_xdg_base_dir(xdg_cache_env, home_dir, ".cache").join("scrim")
+}
+
+pub fn resolve_state_dir(
+    xdg_state_env: Option<&Path>,
+    home_dir: Option<&Path>,
+) -> PathBuf {
+    resolve_xdg_base_dir(xdg_state_env, home_dir, ".local/state").join("scrim")
+}
+
+pub fn resolve_default_telemetry_log_path(
+    xdg_state_env: Option<&Path>,
+    home_dir: Option<&Path>,
+) -> PathBuf {
+    resolve_state_dir(xdg_state_env, home_dir).join("telemetry.log")
 }
 

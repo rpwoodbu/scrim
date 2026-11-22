@@ -19,7 +19,7 @@
 - **Reliability**: Failures in telemetry or other auxiliary tasks must never block or prevent tool execution.
 - **YAGNI (You Aren't Gonna Need It)**: Favor simplicity and minimal configuration. Avoid preemptive abstractions until they are strictly required.
 - **DRY (Don't Repeat Yourself)**: Avoid duplicating logic or configuration; centralize shared behavior.
-- **No Global State**: Library modules MUST NOT read or mutate process-global state (e.g., environment variables). All global state (such as `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, and `PATH`) MUST be captured at the application entrypoint and passed to internal logic via explicit parameters to ensure modularity, thread safety, and testability.
+- **No Global State**: Library modules MUST NOT read or mutate process-global state (e.g., environment variables). All global state (such as `HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `XDG_STATE_HOME`, and `PATH`) MUST be captured at the application entrypoint and passed to internal logic via explicit parameters to ensure modularity, thread safety, and testability.
 
 ## UX
 
@@ -29,7 +29,7 @@
 
 ### Management CLI
 
-When invoked directly as `scrim` (i.e., `argv[0]` is `scrim`), Scrim provides a management CLI rather than proxying a tool. CLI arguments are parsed using `clap`. Running `scrim` without any arguments will display usage information and available commands. Scrim will fail with an error if the user provides any invalid arguments or undefined flags. The main help output also documents supported environment variables (e.g., `XDG_CACHE_HOME`, `XDG_CONFIG_HOME`). The CLI supports the following commands:
+When invoked directly as `scrim` (i.e., `argv[0]` is `scrim`), Scrim provides a management CLI rather than proxying a tool. CLI arguments are parsed using `clap`. Running `scrim` without any arguments will display usage information and available commands. Scrim will fail with an error if the user provides any invalid arguments or undefined flags. The main help output also documents supported environment variables (e.g., `XDG_CACHE_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`). The CLI supports the following commands:
 - `help`: Displays usage information and available commands.
 - `version`: Displays the version of Scrim. If built with workspace status stamping (e.g., release builds), it outputs the release commit hash alongside the semantic version in the format `scrim <version> (<commit_hash>)`. In unstamped builds, it outputs `scrim <version>`.
 - `config`: Reports the resultant aggregated configuration after resolving all configuration layers, or reports a specific tool's configuration if an optional tool name argument is provided. Unspecified fields and empty collections are omitted from the output to reduce noise.
@@ -116,7 +116,8 @@ The `scrim which` command outputs the precise absolute path of the binary that w
 
 Example `scrim.yaml`:
 ```yaml
-telemetry: true # disabled (false) by default
+telemetry:
+  file: {} # optional; telemetry is disabled when no sinks are configured
 default_platform: linux-x86_64 # optional file-level default platform syntactic sugar
 imports:
   - base-tools.yaml
@@ -179,7 +180,7 @@ Scrim works by acting as a drop-in shim for developer tools. Unlike tools that r
 ### Resolution Logic
 When a command (e.g., `node`) is invoked, Scrim follows this resolution logic:
 
-1.  **Configuration Layering**: Scrim resolves configurations by aggregating them across multiple layers. The resultant configuration includes all tools found across all layers. In cases where the same tool or global setting is defined in multiple layers, the layer with the highest precedence wins (i.e., precedence is evaluated on a per-tool basis). The configuration layers, in increasing order of precedence, are:
+1.  **Configuration Layering**: Scrim resolves configurations by aggregating them across multiple layers. The resultant configuration includes all tools found across all layers. In cases where the same tool or global setting is defined in multiple layers, the layer with the highest precedence wins (i.e., precedence is evaluated on a per-tool basis), with the explicit exception of `telemetry`: telemetry sinks are strictly additive across layers and higher layers cannot disable or override lower-layer sinks. The configuration layers, in increasing order of precedence, are:
     1. **System-Level Configuration**: `/etc/scrim/scrim.yaml`
     2. **User-Level Configuration**: `<resolved_config_dir>/scrim/scrim.yaml`. Following the [XDG Base Directory Specification][xdg-basedir], `<resolved_config_dir>` is determined by:
         1. Environment variable: `XDG_CONFIG_HOME`, if set, non-empty, and an absolute path.
@@ -187,6 +188,26 @@ When a command (e.g., `node`) is invoked, Scrim follows this resolution logic:
     3. **Recursive Search**: Search upwards from the current working directory (CWD) for `scrim.yaml` files. To minimize filesystem overhead, the search automatically stops when it encounters a known repository boundary (e.g., a `.git` directory). Configuration files found in child directories take precedence over those found in their parent directories.
 2.  **Configuration Rules**:
     - **Note**: The configuration uses YAML and separates global settings (like `telemetry`) from tool-specific configurations.
+    - **Telemetry Configuration**: Telemetry is configured via the top-level `telemetry` mapping, which groups sinks by sink type (currently `file`). Telemetry is disabled when no sinks are configured across any layer.
+        - **Canonical Schema & Shorthands**:
+          - Each sink type under `telemetry` (currently `file`) is canonically a sequence of structured sink objects:
+            ```yaml
+            telemetry:
+              file:
+                - {}                                 # default XDG state log path
+                - path: /var/log/scrim/telemetry.log # explicit absolute path
+            ```
+          - **Shorthands**: For convenience, `file` accepts either a sequence or a single entry, and each entry may be either a structured object (`{}` or `{ path: <path> }`) or a string shorthand representing `path` (e.g., `file: {}`, `file: /var/log/scrim/telemetry.log`, or `- /var/log/scrim/telemetry.log`). Bare `null` (`file:`) is rejected as a parse error.
+          - **Deprecated Boolean Shorthand**: The legacy boolean form (`telemetry: true` / `telemetry: false`) is **deprecated** (kept for backward compatibility during pre-v1 migration without emitting a runtime deprecation warning). `telemetry: true` adds a single default-path `file` sink (`file: [{}]`); `telemetry: false` is a no-op that adds no sinks and cannot disable sinks from lower layers.
+          - **Canonical Output**: `scrim config` always serializes `telemetry` in canonical sequence-of-objects form (e.g., `telemetry:\n  file:\n    - {}`), and omits `telemetry` when no sinks are configured.
+        - **File Sink Path & Default Destination**:
+          - When `path` is omitted (`{}`), the destination defaults to `<resolved_state_dir>/scrim/telemetry.log`. Following the [XDG Base Directory Specification][xdg-basedir], `<resolved_state_dir>` is determined by:
+            1. Environment variable: `XDG_STATE_HOME`, if set, non-empty, and an absolute path.
+            2. Default location: `~/.local/state` (falling back to `./.local/state` if `$HOME` is unset).
+          - When `path` is specified, it MUST be an absolute path. Relative or empty paths are rejected per Global Settings Fault Tolerance: Scrim emits an attributed warning to `stderr` and discards only the invalid sink entry, keeping all other valid sinks intact.
+        - **Additive Layering & Deduplication**:
+          - Telemetry sinks are strictly additive across configuration layers (system, user, workspace) and `imports`. Higher layers can only add sinks; they cannot disable or override lower-layer sinks.
+          - Identical sink entries are deduplicated (preserving order) during configuration merging, and resolved file destinations are deduplicated at execution time so a single invocation never writes duplicate log entries to the same file.
     - **Configuration Imports**: A configuration file may specify an `imports` list to include definitions from other configuration files.
         - **Syntax**: Entries in `imports` can be either a string shorthand representing the relative or absolute path (e.g., `- base-tools.yaml` or `- shared/tools.yaml`) or a structured object:
           ```yaml
@@ -289,13 +310,14 @@ To minimize overhead, Scrim will use `execve` (on Unix) to replace the current p
 ### Telemetry Hook
 Telemetry is gathered to track tool usage patterns.
 - **Constraint**: Must never block or cause the tool to fail.
-- **Implementation**: 
-    - Scrim will `fork()` before executing the target tool.
-    - The **Parent** process will immediately `execve()` the target tool to preserve the original PID and environment.
-    - The **Child** process will handle telemetry gathering and reporting in the background, then exit silently. Currently, telemetry is simply written to a hardcoded log file at `/tmp/scrim_telemetry.log`.
-    - This ensures telemetry is completely decoupled from the tool's execution latency.
+- **Implementation**:
+    - If no telemetry sinks are configured in the aggregated configuration, Scrim skips telemetry completely (no `fork()`).
+    - Otherwise, Scrim calls `fork()` **once** before executing the target tool.
+    - The **Parent** process immediately calls `execve()` for the target tool to preserve the original PID and environment.
+    - The **Child** process detaches inherited standard I/O (`stdin`, `stdout`, and `stderr` redirected to `/dev/null` or closed) so callers capturing output via pipes never block waiting for EOF from the telemetry child. It then creates any missing parent directories, formats the JSON log entry once, appends it to each unique resolved file sink (silently ignoring any filesystem or I/O errors), and exits immediately via `_exit(0)`.
+    - All directory creation and file I/O occur strictly in the background child process, keeping telemetry completely decoupled from the target tool's blocking execution path.
 - **PATH Fallback Invocations**:
-    - When a tool is executed via PATH fallback (for undefined tools), telemetry usage is recorded if telemetry is enabled in the active configuration.
+    - When a tool is executed via PATH fallback (for undefined tools), telemetry usage is recorded if at least one telemetry sink is configured in the active configuration.
     - The telemetry log entry retains the standard JSON structure (`tool`, `target`, `timestamp`), recording the tool name and the resolved path to the system binary (e.g., `{"tool": "node", "target": "/usr/bin/node", "timestamp": "..."}`).
 
 ### Logging & User Communication
@@ -354,7 +376,8 @@ Performance is a primary design goal. To ensure Scrim remains thin and fast, we 
 ## Future Work
 - **Cache Management**: Commands to clean or inspect the cache directory.
 - **Home Directory Search Boundary**: Stop upward directory traversal for `scrim.yaml` at `$HOME` to prevent scanning system directories when outside of a repository.
-- **Configurable Telemetry**: Support configuring the telemetry behavior and output destination (rather than hardcoding `/tmp/scrim_telemetry.log`).
+- **Additional Telemetry Sinks**: Extend `telemetry` with additional non-file sink types (e.g., HTTP/OTLP endpoints or external command hooks) alongside `file`.
+- **Configurable `file` Telemetry Format**: Support configuring the format and fields written by `file` telemetry sinks rather than hardcoding the JSON fields.
 - **macOS Releases**: Support for building and releasing binaries for macOS (e.g., Apple Silicon / Intel).
 
 [xdg-basedir]: https://specifications.freedesktop.org/basedir/0.8/ "XDG Base Directory Specification (version 0.8)"

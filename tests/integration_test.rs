@@ -69,15 +69,14 @@ tools:
     #[cfg(unix)]
     std::os::unix::fs::symlink(&scrim_bin, &shim_path).unwrap();
 
-    // Override HOME to isolate the cache
+    // Override HOME, XDG_CONFIG_HOME, and XDG_STATE_HOME to isolate config, cache, and telemetry
+    fs::create_dir_all(temp_path.join(".git")).unwrap();
     let cache_home = temp_path.join("fake_home");
+    let config_home = temp_path.join("xdg_config");
+    let state_home = temp_path.join("fake_state");
     fs::create_dir_all(&cache_home).unwrap();
-
-    // Clear previous log if any
-    let log_path = Path::new("/tmp/scrim_telemetry.log");
-    if log_path.exists() {
-        let _ = fs::remove_file(log_path);
-    }
+    fs::create_dir_all(&state_home).unwrap();
+    let log_path = state_home.join("scrim/telemetry.log");
 
     // 4. Execute the symlink shim
     let output = Command::new(&shim_path)
@@ -85,6 +84,9 @@ tools:
         .arg("world")
         .current_dir(temp_path)
         .env("HOME", &cache_home)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_STATE_HOME", &state_home)
+        .env_remove("XDG_CACHE_HOME")
         .output()
         .expect("Failed to execute demotool shim");
 
@@ -114,6 +116,9 @@ tools:
         .arg("run")
         .current_dir(temp_path)
         .env("HOME", &cache_home)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_STATE_HOME", &state_home)
+        .env_remove("XDG_CACHE_HOME")
         .output()
         .expect("Failed to execute demotool shim on cache hit");
 
@@ -123,14 +128,10 @@ tools:
 
     // Verify telemetry did not write any log entries (since telemetry: false is set)
     std::thread::sleep(std::time::Duration::from_millis(50));
-    if log_path.exists() {
-        let content = fs::read_to_string(log_path).unwrap();
-        assert!(
-            !content.contains("\"tool\": \"demotool\""),
-            "Telemetry reported usage even though telemetry: false was set! Log content: {:?}",
-            content
-        );
-    }
+    assert!(
+        !log_path.exists(),
+        "Telemetry log should not be created when telemetry: false is set"
+    );
 }
 
 #[test]
@@ -224,11 +225,10 @@ tools:
     );
     fs::write(&scrim_yaml, config_content).unwrap();
 
-    // Clear previous log if any
-    let log_path = Path::new("/tmp/scrim_telemetry.log");
-    if log_path.exists() {
-        let _ = fs::remove_file(log_path);
-    }
+    let state_home = temp_path.join("state");
+    let config_home = temp_path.join("xdg_config");
+    fs::create_dir_all(temp_path.join(".git")).unwrap();
+    let log_path = state_home.join("scrim/telemetry.log");
 
     // 3. Create symlink node -> scrim
     let shim_path = temp_path.join("node");
@@ -238,41 +238,17 @@ tools:
     // 4. Run the shim
     let output = Command::new(&shim_path)
         .current_dir(temp_path)
+        .env("HOME", temp_path)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_STATE_HOME", &state_home)
         .output()
         .expect("Failed to run local path shim");
 
     assert!(output.status.success());
 
-    // 5. Poll the log file up to a 1-second timeout (checking every 5ms)
-    let start = std::time::Instant::now();
-    let timeout = std::time::Duration::from_secs(5);
-    let poll_interval = std::time::Duration::from_millis(5);
-    let mut log_content = String::new();
-    let mut success = false;
-
-    while start.elapsed() < timeout {
-        if log_path.exists() {
-            if let Ok(content) = fs::read_to_string(log_path) {
-                if content.contains("\"tool\": \"node\"") {
-                    log_content = content;
-                    success = true;
-                    break;
-                }
-            }
-        }
-        std::thread::sleep(poll_interval);
-    }
-
-    // Clean up before asserting (so we don't leave artifacts if assertion fails)
-    if log_path.exists() {
-        let _ = fs::remove_file(log_path);
-    }
-
-    assert!(
-        success,
-        "Telemetry log did not write correctly within 5s timeout! Captured content: {:?}",
-        log_content
-    );
+    // 5. Poll the log file up to a 5-second timeout
+    let log_content = poll_log_contains(&log_path, "\"tool\": \"node\"");
+    assert!(log_content.contains(&format!("\"target\": \"{}\"", local_tool.display())));
 }
 
 #[test]
@@ -297,7 +273,7 @@ fn test_e2e_telemetry_disabled_by_default() {
         fs::set_permissions(&local_tool, perms).unwrap();
     }
 
-    // 2. Create scrim.yaml WITHOUT specifying telemetry (should default to false)
+    // 2. Create scrim.yaml WITHOUT specifying telemetry (should default to disabled)
     let scrim_yaml = temp_path.join("scrim.yaml");
     let config_content = format!(
         r#"
@@ -311,11 +287,10 @@ tools:
     );
     fs::write(&scrim_yaml, config_content).unwrap();
 
-    // Clear previous log if any
-    let log_path = Path::new("/tmp/scrim_telemetry.log");
-    if log_path.exists() {
-        let _ = fs::remove_file(log_path);
-    }
+    let state_home = temp_path.join("state");
+    let config_home = temp_path.join("xdg_config");
+    fs::create_dir_all(temp_path.join(".git")).unwrap();
+    let log_path = state_home.join("scrim/telemetry.log");
 
     // 3. Create symlink node -> scrim
     let shim_path = temp_path.join("node");
@@ -325,21 +300,20 @@ tools:
     // 4. Run the shim
     let output = Command::new(&shim_path)
         .current_dir(temp_path)
+        .env("HOME", temp_path)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_STATE_HOME", &state_home)
         .output()
         .expect("Failed to run local path shim");
 
     assert!(output.status.success());
 
-    // 5. Verify telemetry did not write any log entries (since it defaults to false)
+    // 5. Verify telemetry did not write any log entries (since no sinks are configured)
     std::thread::sleep(std::time::Duration::from_millis(50));
-    if log_path.exists() {
-        let content = fs::read_to_string(log_path).unwrap();
-        assert!(
-            !content.contains("\"tool\": \"node\""),
-            "Telemetry reported usage even though telemetry is not specified (should default to false)! Log content: {:?}",
-            content
-        );
-    }
+    assert!(
+        !log_path.exists(),
+        "Telemetry log should not exist when no sinks are configured"
+    );
 }
 
 #[test]
@@ -791,6 +765,7 @@ fn test_e2e_management_cli() {
     assert!(stdout_help_flag.contains("Environment Variables:"));
     assert!(stdout_help_flag.contains("XDG_CACHE_HOME"));
     assert!(stdout_help_flag.contains("XDG_CONFIG_HOME"));
+    assert!(stdout_help_flag.contains("XDG_STATE_HOME"));
 
     let output_h_flag = Command::new(&scrim_bin)
         .arg("-h")
@@ -819,6 +794,8 @@ fn test_e2e_management_cli() {
     }
 
     // 4. Run with 'config'
+    fs::create_dir_all(temp_path.join(".git")).unwrap();
+    let config_home = temp_path.join("xdg_config");
     let scrim_yaml = temp_path.join("scrim.yaml");
     let config_content = r#"telemetry: false
 default_platform: linux-x86_64
@@ -830,11 +807,13 @@ tools:
 
     let output = Command::new(&scrim_bin)
         .arg("config")
+        .env("HOME", temp_path)
+        .env("XDG_CONFIG_HOME", &config_home)
         .current_dir(temp_path)
         .output()
         .expect("Failed to run scrim config");
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("telemetry: false"));
+    assert!(!stdout.contains("telemetry"), "Disabled telemetry should be omitted, got:\n{}", stdout);
     assert!(stdout.contains("system_path: /bin/echo"));
     assert!(!stdout.contains("null"), "Output should not contain null entries");
     assert!(!stdout.contains("url:"), "Unspecified url should be omitted");
@@ -1754,7 +1733,10 @@ tools:
         .expect("Failed to run scrim config");
     assert!(output_all.status.success());
     let stdout_all = String::from_utf8(output_all.stdout).unwrap();
-    assert!(stdout_all.contains("telemetry: true"));
+    assert!(stdout_all.contains("telemetry:"));
+    assert!(stdout_all.contains("file:"));
+    assert!(stdout_all.contains("- {}"));
+    assert!(!stdout_all.contains("telemetry: true"));
     assert!(stdout_all.contains("node:"));
     assert!(stdout_all.contains("go:"));
     assert!(stdout_all.contains("gofmt:"));
@@ -3084,16 +3066,17 @@ tools:
     )
     .unwrap();
 
-    let telemetry_log = Path::new("/tmp/scrim_telemetry.log");
-    let initial_len = if telemetry_log.exists() {
-        fs::read_to_string(telemetry_log).unwrap().len()
-    } else {
-        0
-    };
+    let state_home = temp_path.join("state");
+    let config_home = temp_path.join("xdg_config");
+    fs::create_dir_all(temp_path.join(".git")).unwrap();
+    let telemetry_log = state_home.join("scrim/telemetry.log");
 
     let path_env = format!("{}:{}", shim_dir.display(), sys_dir.display());
     let out = Command::new(&shim_path)
         .env("PATH", &path_env)
+        .env("HOME", temp_path)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_STATE_HOME", &state_home)
         .current_dir(temp_path)
         .output()
         .unwrap();
@@ -3105,13 +3088,8 @@ tools:
         String::from_utf8_lossy(&out.stderr)
     );
 
-    // Wait a brief moment for child process to flush telemetry
-    std::thread::sleep(std::time::Duration::from_millis(150));
-
-    let content = fs::read_to_string(telemetry_log).unwrap();
-    let new_entries = &content[initial_len..];
-    assert!(new_entries.contains("\"tool\": \"telemetry_tool\""));
-    assert!(new_entries.contains(&format!("\"target\": \"{}\"", sys_tool.display())));
+    let content = poll_log_contains(&telemetry_log, "\"tool\": \"telemetry_tool\"");
+    assert!(content.contains(&format!("\"target\": \"{}\"", sys_tool.display())));
 }
 
 #[test]
@@ -3694,7 +3672,567 @@ tools:
     assert!(!target_links_dir.join("bad_tool").exists());
 }
 
+fn poll_log_contains(log_path: &Path, needle: &str) -> String {
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(5);
+    while start.elapsed() < timeout {
+        if let Ok(content) = fs::read_to_string(log_path) {
+            if content.contains(needle) {
+                return content;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!(
+        "Timed out waiting for '{}' in telemetry log '{}'",
+        needle,
+        log_path.display()
+    );
+}
 
+#[test]
+fn test_e2e_telemetry_file_default_xdg_and_custom_path() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
 
+    let local_tool = temp_path.join("fast_tool");
+    fs::write(&local_tool, "#!/bin/sh\necho \"fast output\"\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&local_tool).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&local_tool, perms).unwrap();
+    }
 
+    let state_home = temp_path.join("state_root");
+    let config_home = temp_path.join("xdg_config");
+    let custom_log = temp_path.join("custom/nested/dir/telemetry.log");
 
+    // 1. Default XDG path via `file: {}`
+    let proj_default = temp_path.join("proj_default");
+    fs::create_dir_all(proj_default.join(".git")).unwrap();
+    fs::write(
+        proj_default.join("scrim.yaml"),
+        format!(
+            "telemetry:\n  file: {{}}\ndefault_platform: linux-x86_64\ntools:\n  fast_tool:\n    system_path: \"{}\"\n",
+            local_tool.display()
+        ),
+    )
+    .unwrap();
+    let shim_default = proj_default.join("fast_tool");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &shim_default).unwrap();
+
+    let out = Command::new(&shim_default)
+        .current_dir(&proj_default)
+        .env("HOME", temp_path)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_STATE_HOME", &state_home)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "fast output\n");
+
+    let default_log = state_home.join("scrim/telemetry.log");
+    let default_content = poll_log_contains(&default_log, "\"tool\": \"fast_tool\"");
+    assert!(default_content.contains(&format!("\"target\": \"{}\"", local_tool.display())));
+
+    // 2. Explicit custom nested path via string shorthand `file: <abs_path>`
+    let proj_custom = temp_path.join("proj_custom");
+    fs::create_dir_all(proj_custom.join(".git")).unwrap();
+    fs::write(
+        proj_custom.join("scrim.yaml"),
+        format!(
+            "telemetry:\n  file: \"{}\"\ndefault_platform: linux-x86_64\ntools:\n  fast_tool:\n    system_path: \"{}\"\n",
+            custom_log.display(),
+            local_tool.display()
+        ),
+    )
+    .unwrap();
+    let shim_custom = proj_custom.join("fast_tool");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &shim_custom).unwrap();
+
+    let out_custom = Command::new(&shim_custom)
+        .current_dir(&proj_custom)
+        .env("HOME", temp_path)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_STATE_HOME", &state_home)
+        .output()
+        .unwrap();
+    assert!(out_custom.status.success());
+    let custom_content = poll_log_contains(&custom_log, "\"tool\": \"fast_tool\"");
+    assert!(custom_content.contains(&format!("\"target\": \"{}\"", local_tool.display())));
+
+    // 3. `scrim config` serializes string shorthand in canonical sequence-of-objects form
+    let out_cfg = Command::new(&scrim_bin)
+        .arg("config")
+        .current_dir(&proj_custom)
+        .env("HOME", temp_path)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(out_cfg.status.success());
+    let cfg_stdout = String::from_utf8(out_cfg.stdout).unwrap();
+    assert!(cfg_stdout.contains("telemetry:"));
+    assert!(cfg_stdout.contains("file:"));
+    assert!(cfg_stdout.contains(&format!("- path: {}", custom_log.display())));
+}
+
+#[test]
+fn test_e2e_telemetry_additive_layering_and_deduplication() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    let local_tool = temp_path.join("my_tool");
+    fs::write(&local_tool, "#!/bin/sh\necho \"layered ok\"\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&local_tool).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&local_tool, perms).unwrap();
+    }
+
+    let state_home = temp_path.join("state");
+    let config_home = temp_path.join("xdg_config");
+    let default_log = state_home.join("scrim/telemetry.log");
+    let log_a = temp_path.join("logs/a.log");
+    let log_b = temp_path.join("logs/b.log");
+
+    // Parent config sets log_a
+    let repo_root = temp_path.join("repo");
+    let child_dir = repo_root.join("sub");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(&child_dir).unwrap();
+
+    fs::write(
+        repo_root.join("scrim.yaml"),
+        format!(
+            "telemetry:\n  file: \"{}\"\ndefault_platform: linux-x86_64\ntools:\n  my_tool:\n    system_path: \"{}\"\n",
+            log_a.display(),
+            local_tool.display()
+        ),
+    )
+    .unwrap();
+
+    // Imported file adds default {}, duplicate log_a, duplicate resolved default_log, and log_b
+    fs::write(
+        child_dir.join("extra.yaml"),
+        format!(
+            "telemetry:\n  file:\n    - {{}}\n    - \"{}\"\n    - \"{}\"\n    - path: \"{}\"\n",
+            log_a.display(),
+            default_log.display(),
+            log_b.display()
+        ),
+    )
+    .unwrap();
+
+    // Child sets deprecated `telemetry: false` (must NOT disable parent or imported sinks)
+    fs::write(
+        child_dir.join("scrim.yaml"),
+        "telemetry: false\nimports:\n  - path: extra.yaml\n    precedence: after\n",
+    )
+    .unwrap();
+
+    let shim = child_dir.join("my_tool");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &shim).unwrap();
+
+    let out = Command::new(&shim)
+        .current_dir(&child_dir)
+        .env("HOME", temp_path)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_STATE_HOME", &state_home)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+
+    let content_a = poll_log_contains(&log_a, "\"tool\": \"my_tool\"");
+    let content_b = poll_log_contains(&log_b, "\"tool\": \"my_tool\"");
+    let content_default = poll_log_contains(&default_log, "\"tool\": \"my_tool\"");
+
+    // Small wait to ensure any hypothetical duplicate write would have settled
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert_eq!(fs::read_to_string(&log_a).unwrap().lines().count(), 1, "log_a should have 1 entry: {:?}", content_a);
+    assert_eq!(fs::read_to_string(&log_b).unwrap().lines().count(), 1, "log_b should have 1 entry: {:?}", content_b);
+    assert_eq!(
+        fs::read_to_string(&default_log).unwrap().lines().count(),
+        1,
+        "default_log should have 1 entry after runtime deduplication: {:?}",
+        content_default
+    );
+}
+
+#[test]
+fn test_e2e_telemetry_relative_path_fault_tolerance() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+    fs::create_dir_all(temp_path.join(".git")).unwrap();
+
+    let local_tool = temp_path.join("real_tool");
+    fs::write(&local_tool, "#!/bin/sh\necho \"fault tolerant ok\"\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&local_tool).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&local_tool, perms).unwrap();
+    }
+
+    let valid_log = temp_path.join("valid/telemetry.log");
+    let config_home = temp_path.join("xdg_config");
+    let state_home = temp_path.join("xdg_state");
+
+    fs::write(
+        temp_path.join("scrim.yaml"),
+        format!(
+            "telemetry:\n  file:\n    - relative/bad.log\n    - \"{}\"\ndefault_platform: linux-x86_64\ntools:\n  my_tool:\n    system_path: \"{}\"\n",
+            valid_log.display(),
+            local_tool.display()
+        ),
+    )
+    .unwrap();
+
+    let shim = temp_path.join("my_tool");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &shim).unwrap();
+
+    let out = Command::new(&shim)
+        .current_dir(temp_path)
+        .env("HOME", temp_path)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_STATE_HOME", &state_home)
+        .output()
+        .unwrap();
+
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "fault tolerant ok\n");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("[Scrim] Warning:"), "stderr: {}", stderr);
+    assert!(stderr.contains("relative/bad.log"), "stderr: {}", stderr);
+
+    assert!(!temp_path.join("relative/bad.log").exists());
+    let valid_content = poll_log_contains(&valid_log, "\"tool\": \"my_tool\"");
+    assert!(valid_content.contains(&format!("\"target\": \"{}\"", local_tool.display())));
+}
+
+#[test]
+fn test_e2e_telemetry_child_detaches_stdio_no_pipe_hang() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+    fs::create_dir_all(temp_path.join(".git")).unwrap();
+
+    let local_tool = temp_path.join("real_tool");
+    fs::write(&local_tool, "#!/bin/sh\necho \"fifo test ok\"\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&local_tool).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&local_tool, perms).unwrap();
+    }
+
+    let fifo_path = temp_path.join("telemetry.fifo");
+    let mkfifo_status = Command::new("mkfifo").arg(&fifo_path).status().unwrap();
+    assert!(mkfifo_status.success(), "mkfifo failed");
+
+    let config_home = temp_path.join("xdg_config");
+    let state_home = temp_path.join("xdg_state");
+    fs::write(
+        temp_path.join("scrim.yaml"),
+        format!(
+            "telemetry:\n  file: \"{}\"\ndefault_platform: linux-x86_64\ntools:\n  my_tool:\n    system_path: \"{}\"\n",
+            fifo_path.display(),
+            local_tool.display()
+        ),
+    )
+    .unwrap();
+
+    let shim = temp_path.join("my_tool");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &shim).unwrap();
+
+    // Run shim with piped stdout/stderr while NO reader is attached to the FIFO.
+    // The telemetry child blocks in open(fifo_path), so output() returns promptly
+    // ONLY if detach_stdio() closed/redirected inherited stdout/stderr pipes.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let shim_clone = shim.clone();
+    let dir_clone = temp_path.to_path_buf();
+    let cfg_clone = config_home.clone();
+    let state_clone = state_home.clone();
+    let cmd_thread = std::thread::spawn(move || {
+        let out = Command::new(&shim_clone)
+            .current_dir(&dir_clone)
+            .env("HOME", &dir_clone)
+            .env("XDG_CONFIG_HOME", &cfg_clone)
+            .env("XDG_STATE_HOME", &state_clone)
+            .output()
+            .unwrap();
+        let _ = tx.send(out);
+    });
+
+    let out = match rx.recv_timeout(std::time::Duration::from_secs(3)) {
+        Ok(out) => out,
+        Err(_) => {
+            // Unblock the child if it held stdout/stderr open while blocked on FIFO
+            let _ = fs::OpenOptions::new().read(true).open(&fifo_path);
+            panic!("Command::output() hung waiting on telemetry child holding stdio pipes");
+        }
+    };
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "fifo test ok\n");
+    cmd_thread.join().unwrap();
+
+    // Now open the FIFO read end to unblock the telemetry child and verify the entry arrives.
+    let (fifo_tx, fifo_rx) = std::sync::mpsc::channel();
+    let fifo_clone = fifo_path.clone();
+    let reader_thread = std::thread::spawn(move || {
+        let content = fs::read_to_string(&fifo_clone).unwrap();
+        let _ = fifo_tx.send(content);
+    });
+    let fifo_content = fifo_rx
+        .recv_timeout(std::time::Duration::from_secs(3))
+        .expect("Timed out reading telemetry entry from FIFO");
+    reader_thread.join().unwrap();
+    assert!(fifo_content.contains("\"tool\": \"my_tool\""));
+    assert!(fifo_content.contains(&format!("\"target\": \"{}\"", local_tool.display())));
+}
+
+#[test]
+fn test_e2e_telemetry_scrim_run_and_xdg_state_fallback() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+    fs::create_dir_all(temp_path.join(".git")).unwrap();
+
+    let local_tool = temp_path.join("real_tool");
+    fs::write(&local_tool, "#!/bin/sh\necho \"run args=$*\"\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&local_tool).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&local_tool, perms).unwrap();
+    }
+
+    let home_dir = temp_path.join("home");
+    let config_home = temp_path.join("xdg_config");
+    fs::create_dir_all(&home_dir).unwrap();
+    fs::write(
+        temp_path.join("scrim.yaml"),
+        format!(
+            "telemetry:\n  file: {{}}\ndefault_platform: linux-x86_64\ntools:\n  my_tool:\n    system_path: \"{}\"\n",
+            local_tool.display()
+        ),
+    )
+    .unwrap();
+
+    let default_log = home_dir.join(".local/state/scrim/telemetry.log");
+
+    // 1. `scrim run` with XDG_STATE_HOME unset falls back to $HOME/.local/state/scrim/telemetry.log
+    let out_unset = Command::new(&scrim_bin)
+        .args(["run", "my_tool", "one"])
+        .current_dir(temp_path)
+        .env("HOME", &home_dir)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env_remove("XDG_STATE_HOME")
+        .output()
+        .unwrap();
+    assert!(out_unset.status.success());
+    assert_eq!(String::from_utf8_lossy(&out_unset.stdout), "run args=one\n");
+
+    let content1 = poll_log_contains(&default_log, "\"tool\": \"my_tool\"");
+    assert!(content1.contains(&format!("\"target\": \"{}\"", local_tool.display())));
+
+    // 2. Relative XDG_STATE_HOME is ignored and also falls back to $HOME/.local/state/scrim/telemetry.log
+    fs::remove_file(&default_log).unwrap();
+    let out_rel = Command::new(&scrim_bin)
+        .args(["run", "my_tool", "two"])
+        .current_dir(temp_path)
+        .env("HOME", &home_dir)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_STATE_HOME", "relative/state")
+        .output()
+        .unwrap();
+    assert!(out_rel.status.success());
+    assert_eq!(String::from_utf8_lossy(&out_rel.stdout), "run args=two\n");
+
+    let content2 = poll_log_contains(&default_log, "\"tool\": \"my_tool\"");
+    assert!(content2.contains(&format!("\"target\": \"{}\"", local_tool.display())));
+}
+
+#[test]
+fn test_e2e_telemetry_invalid_yaml_discarded_retains_lower_layer() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+
+    let local_tool = temp_path.join("real_tool");
+    fs::write(&local_tool, "#!/bin/sh\necho \"lower layer ok\"\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&local_tool).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&local_tool, perms).unwrap();
+    }
+
+    let repo_root = temp_path.join("repo");
+    let child_dir = repo_root.join("sub");
+    fs::create_dir_all(repo_root.join(".git")).unwrap();
+    fs::create_dir_all(&child_dir).unwrap();
+
+    let parent_log = temp_path.join("parent_telemetry.log");
+    let config_home = temp_path.join("xdg_config");
+    let state_home = temp_path.join("xdg_state");
+
+    fs::write(
+        repo_root.join("scrim.yaml"),
+        format!(
+            "telemetry:\n  file: \"{}\"\ndefault_platform: linux-x86_64\ntools:\n  my_tool:\n    system_path: \"{}\"\n",
+            parent_log.display(),
+            local_tool.display()
+        ),
+    )
+    .unwrap();
+
+    // Child contains invalid bare-null `file:`, so child file is discarded with warning
+    fs::write(
+        child_dir.join("scrim.yaml"),
+        "telemetry:\n  file:\ntools:\n  my_tool:\n    system_path: /nonexistent/broken_tool\n",
+    )
+    .unwrap();
+
+    let shim = child_dir.join("my_tool");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &shim).unwrap();
+
+    let out = Command::new(&shim)
+        .current_dir(&child_dir)
+        .env("HOME", temp_path)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_STATE_HOME", &state_home)
+        .output()
+        .unwrap();
+
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "lower layer ok\n");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("[Scrim] Warning:"), "stderr: {}", stderr);
+
+    let log_content = poll_log_contains(&parent_log, "\"tool\": \"my_tool\"");
+    assert!(log_content.contains(&format!("\"target\": \"{}\"", local_tool.display())));
+}
+
+#[test]
+fn test_e2e_telemetry_relative_path_in_config_and_links() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+    fs::create_dir_all(temp_path.join(".git")).unwrap();
+
+    let valid_log = temp_path.join("logs/valid.log");
+    let config_home = temp_path.join("xdg_config");
+    let links_dir = temp_path.join("bin");
+    fs::create_dir_all(&links_dir).unwrap();
+
+    fs::write(
+        temp_path.join("scrim.yaml"),
+        format!(
+            "telemetry:\n  file:\n    - relative/bad.log\n    - \"{}\"\ndefault_platform: linux-x86_64\ntools:\n  my_tool:\n    system_path: /bin/echo\n",
+            valid_log.display()
+        ),
+    )
+    .unwrap();
+
+    // 1. `scrim config` exits 0, warns on stderr, omits invalid sink, keeps valid sink
+    let out_cfg = Command::new(&scrim_bin)
+        .arg("config")
+        .current_dir(temp_path)
+        .env("HOME", temp_path)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(out_cfg.status.success());
+    let cfg_stdout = String::from_utf8(out_cfg.stdout).unwrap();
+    let cfg_stderr = String::from_utf8(out_cfg.stderr).unwrap();
+    assert!(cfg_stderr.contains("[Scrim] Warning:"), "stderr: {}", cfg_stderr);
+    assert!(cfg_stderr.contains("relative/bad.log"), "stderr: {}", cfg_stderr);
+    assert!(!cfg_stdout.contains("relative/bad.log"), "stdout: {}", cfg_stdout);
+    assert!(cfg_stdout.contains(&format!("- path: {}", valid_log.display())), "stdout: {}", cfg_stdout);
+
+    // 2. `scrim links` exits 0, warns on stderr, and still creates the tool symlink
+    let out_links = Command::new(&scrim_bin)
+        .args(["links", links_dir.to_str().unwrap()])
+        .current_dir(temp_path)
+        .env("HOME", temp_path)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .output()
+        .unwrap();
+    assert!(out_links.status.success());
+    let links_stderr = String::from_utf8(out_links.stderr).unwrap();
+    assert!(links_stderr.contains("[Scrim] Warning:"), "stderr: {}", links_stderr);
+    assert!(links_dir.join("my_tool").exists());
+}
+
+#[test]
+fn test_e2e_telemetry_write_failure_isolation() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+    fs::create_dir_all(temp_path.join(".git")).unwrap();
+
+    let local_tool = temp_path.join("real_tool");
+    fs::write(&local_tool, "#!/bin/sh\necho \"write isolation ok\"\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&local_tool).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&local_tool, perms).unwrap();
+    }
+
+    // Create a regular file to make unwritable_sink's parent path impossible to create
+    let blocker = temp_path.join("blocker");
+    fs::write(&blocker, "not a directory").unwrap();
+    let unwritable_sink = blocker.join("telemetry.log");
+    let valid_log = temp_path.join("valid/telemetry.log");
+    let config_home = temp_path.join("xdg_config");
+    let state_home = temp_path.join("xdg_state");
+
+    fs::write(
+        temp_path.join("scrim.yaml"),
+        format!(
+            "telemetry:\n  file:\n    - \"{}\"\n    - \"{}\"\ndefault_platform: linux-x86_64\ntools:\n  my_tool:\n    system_path: \"{}\"\n",
+            unwritable_sink.display(),
+            valid_log.display(),
+            local_tool.display()
+        ),
+    )
+    .unwrap();
+
+    let shim = temp_path.join("my_tool");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &shim).unwrap();
+
+    let out = Command::new(&shim)
+        .current_dir(temp_path)
+        .env("HOME", temp_path)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_STATE_HOME", &state_home)
+        .output()
+        .unwrap();
+
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "write isolation ok\n");
+    assert_eq!(String::from_utf8_lossy(&out.stderr), "");
+
+    let log_content = poll_log_contains(&valid_log, "\"tool\": \"my_tool\"");
+    assert!(log_content.contains(&format!("\"target\": \"{}\"", local_tool.display())));
+}

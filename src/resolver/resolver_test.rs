@@ -12,7 +12,6 @@ fn test_resolve_from_config_path() {
     });
     let config = Config { 
         tools,
-        telemetry: Some(true),
         ..Default::default()
     };
 
@@ -31,7 +30,7 @@ fn test_resolve_fetch_sha256() {
         sha256: Some("abc12345".to_string()),
         ..Default::default()
     });
-    let config = Config { tools, telemetry: Some(true), ..Default::default() };
+    let config = Config { tools, ..Default::default() };
 
     let resolved = resolve_tool("go", &config);
     assert_eq!(resolved, Ok(Some(Resolution::Fetch(FetchResolution { 
@@ -49,7 +48,7 @@ fn test_resolve_fetch_sha512() {
         sha512: Some("def67890".to_string()),
         ..Default::default()
     });
-    let config = Config { tools, telemetry: Some(true), ..Default::default() };
+    let config = Config { tools, ..Default::default() };
 
     let resolved = resolve_tool("go", &config);
     assert_eq!(resolved, Ok(Some(Resolution::Fetch(FetchResolution { 
@@ -73,7 +72,7 @@ fn test_resolve_template() {
         template: Some("go".to_string()),
         ..Default::default()
     });
-    let config = Config { tools, telemetry: Some(true), ..Default::default() };
+    let config = Config { tools, ..Default::default() };
 
     let resolved = resolve_tool("gofmt", &config);
     assert_eq!(resolved, Ok(Some(Resolution::Fetch(FetchResolution { 
@@ -102,7 +101,7 @@ fn test_resolve_template_chain_disallowed() {
         template: Some("gofmt".to_string()),
         ..Default::default()
     });
-    let config = Config { tools, telemetry: Some(true), ..Default::default() };
+    let config = Config { tools, ..Default::default() };
 
     let resolved = resolve_tool("go-chained", &config);
     assert_eq!(resolved, Err("Tool 'go-chained' references template 'gofmt', which is also a template. Template chaining is not allowed.".to_string()));
@@ -156,7 +155,7 @@ fn test_resolve_validation_errors() {
         ..Default::default()
     });
 
-    let config = Config { tools, telemetry: Some(true), ..Default::default() };
+    let config = Config { tools, ..Default::default() };
 
     assert_eq!(
         resolve_tool("err_path_missing_digest", &config),
@@ -192,7 +191,7 @@ fn test_resolve_validation_errors() {
         system_path: Some("./bin/relative".to_string()),
         ..Default::default()
     });
-    let config_rel = Config { tools: tools2, telemetry: Some(true), ..Default::default() };
+    let config_rel = Config { tools: tools2, ..Default::default() };
     assert_eq!(
         resolve_tool("rel_path_tool", &config_rel),
         Err("Tool 'rel_path_tool' specifies relative system_path './bin/relative'. 'system_path' must be an absolute path.".to_string())
@@ -202,7 +201,7 @@ fn test_resolve_validation_errors() {
     tools3.insert("empty_tool".to_string(), ToolConfig {
         ..Default::default()
     });
-    let config2 = Config { tools: tools3, telemetry: Some(true), ..Default::default() };
+    let config2 = Config { tools: tools3, ..Default::default() };
     
     assert_eq!(
         resolve_tool("empty_tool", &config2),
@@ -235,7 +234,7 @@ fn test_resolve_system_path_with_fetch_fallback() {
         ..Default::default()
     });
 
-    let config = Config { tools, telemetry: Some(false), ..Default::default() };
+    let config = Config { tools, ..Default::default() };
 
     // Verification 1: Both defined -> SystemPath with fallback
     assert_eq!(

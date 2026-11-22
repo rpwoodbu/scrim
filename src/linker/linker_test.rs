@@ -73,7 +73,6 @@ fn test_create_links_creates_and_cleans_up() {
     tools.insert("node".to_string(), mock_host_tool());
     tools.insert("go".to_string(), mock_host_tool());
     let config = Config {
-        telemetry: None,
         tools,
         ..Default::default()
     };
@@ -130,7 +129,6 @@ fn test_create_links_dry_run() {
     let mut tools = BTreeMap::new();
     tools.insert("node".to_string(), mock_host_tool());
     let config = Config {
-        telemetry: None,
         tools,
         ..Default::default()
     };
@@ -191,7 +189,6 @@ fn test_create_links_does_not_overwrite_existing_file_or_conflicting_symlink() {
     tools.insert("go".to_string(), mock_host_tool());
     tools.insert("rust".to_string(), mock_host_tool());
     let config = Config {
-        telemetry: None,
         tools,
         ..Default::default()
     };
@@ -249,7 +246,6 @@ fn test_create_links_host_platform_filtering() {
     );
 
     let config = Config {
-        telemetry: None,
         tools,
         ..Default::default()
     };

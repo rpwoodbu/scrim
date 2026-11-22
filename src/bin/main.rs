@@ -38,6 +38,7 @@ struct AppEnvironment {
     home_dir: Option<PathBuf>,
     xdg_config_home: Option<PathBuf>,
     xdg_cache_home: Option<PathBuf>,
+    xdg_state_home: Option<PathBuf>,
     path: Option<std::ffi::OsString>,
     current_exe: Option<PathBuf>,
 }
@@ -48,6 +49,7 @@ impl AppEnvironment {
             home_dir: env::var_os("HOME").map(PathBuf::from),
             xdg_config_home: env::var_os("XDG_CONFIG_HOME").map(PathBuf::from),
             xdg_cache_home: env::var_os("XDG_CACHE_HOME").map(PathBuf::from),
+            xdg_state_home: env::var_os("XDG_STATE_HOME").map(PathBuf::from),
             path: env::var_os("PATH"),
             current_exe: env::current_exe().ok(),
         }
@@ -215,12 +217,7 @@ fn proxy_command(program_name: &str, args: &[std::ffi::OsString], app_env: &AppE
             app_env.path.as_deref(),
             app_env.current_exe.as_deref(),
         ) {
-            execute_binary(
-                program_name,
-                &target_path,
-                tool_args,
-                config.telemetry_enabled(),
-            );
+            execute_binary(program_name, &target_path, tool_args, &config.telemetry, app_env);
         } else {
             scrim_error!("{}: command not found", program_name);
             std::process::exit(127);
@@ -236,12 +233,7 @@ fn proxy_command(program_name: &str, args: &[std::ffi::OsString], app_env: &AppE
     };
     let target_path =
         resolve_target_binary_path(program_name, &config, &host_platform, app_env, true, false);
-    execute_binary(
-        program_name,
-        &target_path,
-        tool_args,
-        config.telemetry_enabled(),
-    );
+    execute_binary(program_name, &target_path, tool_args, &config.telemetry, app_env);
 }
 
 fn execute_tool(
@@ -266,19 +258,15 @@ fn execute_tool(
         true,
         allow_fallback,
     );
-    execute_binary(
-        program_name,
-        &target_path,
-        tool_args,
-        config.telemetry_enabled(),
-    );
+    execute_binary(program_name, &target_path, tool_args, &config.telemetry, app_env);
 }
 
 fn execute_binary(
     program_name: &str,
     target_path: &Path,
     tool_args: &[std::ffi::OsString],
-    telemetry_enabled: bool,
+    telemetry: &config::TelemetryConfig,
+    app_env: &AppEnvironment,
 ) -> ! {
     // Prepare the command
     let mut cmd = Command::new(target_path);
@@ -288,9 +276,13 @@ fn execute_binary(
         cmd.args(tool_args);
     }
 
-    // Report usage in the background (non-blocking) if enabled in config
-    if telemetry_enabled {
-        report_usage(program_name, target_path);
+    // Report usage in the background (non-blocking) if any telemetry sinks are configured
+    let telemetry_paths = telemetry.resolve_file_paths(
+        app_env.xdg_state_home.as_deref(),
+        app_env.home_dir.as_deref(),
+    );
+    if !telemetry_paths.is_empty() {
+        report_usage(program_name, target_path, &telemetry_paths);
     }
 
     // Replace the current process with the target tool

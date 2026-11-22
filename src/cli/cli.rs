@@ -41,7 +41,8 @@ pub fn build_cli() -> Command {
         .after_help(
             "Environment Variables:\n  \
              XDG_CACHE_HOME   Base directory for user-specific cache files (default: $HOME/.cache)\n  \
-             XDG_CONFIG_HOME  Base directory for user-specific configuration files (default: $HOME/.config)",
+             XDG_CONFIG_HOME  Base directory for user-specific configuration files (default: $HOME/.config)\n  \
+             XDG_STATE_HOME   Base directory for user-specific state files (default: $HOME/.local/state)",
         )
         .subcommand_required(true)
         .arg_required_else_help(true)

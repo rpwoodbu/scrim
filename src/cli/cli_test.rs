@@ -11,6 +11,7 @@ fn test_no_args_shows_help() {
             assert!(text.contains("Environment Variables:"));
             assert!(text.contains("XDG_CACHE_HOME"));
             assert!(text.contains("XDG_CONFIG_HOME"));
+            assert!(text.contains("XDG_STATE_HOME"));
         }
         other => panic!("Expected Help, got {:?}", other),
     }
@@ -23,6 +24,7 @@ fn test_main_help_flag_shows_environment_variables() {
             assert!(text.contains("Environment Variables:"));
             assert!(text.contains("XDG_CACHE_HOME"));
             assert!(text.contains("XDG_CONFIG_HOME"));
+            assert!(text.contains("XDG_STATE_HOME"));
         }
         other => panic!("Expected Help, got {:?}", other),
     }

@@ -264,8 +264,9 @@ fn test_load_config_layering() {
 
     let config = load_config(&child, Some(root.path()), None).unwrap();
 
-    // Child wins for telemetry
-    assert_eq!(config.telemetry, Some(true));
+    // Child telemetry: true adds default file sink (parent telemetry: false is a no-op)
+    assert!(config.telemetry_enabled());
+    assert_eq!(config.telemetry.file, vec![FileTelemetryConfig { path: None }]);
 
     // Child wins for foo
     let foo_plat = config.tools.get("foo").unwrap().platforms.get("linux-x86_64").unwrap();
@@ -321,7 +322,8 @@ tools:
     sha256: 285c1f0624022839446d32
 "#;
     let config = Config::parse_str(yaml).unwrap();
-    assert_eq!(config.telemetry, Some(true));
+    assert!(config.telemetry_enabled());
+    assert_eq!(config.telemetry.file, vec![FileTelemetryConfig { path: None }]);
     assert_eq!(config.default_platform, None); // default_platform does not leak
 
     let node = config.tools.get("node").unwrap();
@@ -583,7 +585,8 @@ tools:
     system_path: /usr/local/bin/node
 "#;
     let config = Config::parse_str(yaml).unwrap();
-    assert_eq!(config.telemetry, None);
+    assert_eq!(config.telemetry, TelemetryConfig::default());
+    assert!(config.telemetry.is_empty());
     assert_eq!(config.telemetry_enabled(), false);
 }
 
@@ -727,7 +730,9 @@ fn test_config_serialization_order() {
     tools.insert("beta".to_string(), make_tool("/bin/beta"));
     let config = Config {
         default_platform: None,
-        telemetry: Some(true),
+        telemetry: TelemetryConfig {
+            file: vec![FileTelemetryConfig::default()],
+        },
         imports: Vec::new(),
         tools,
     };
@@ -1102,14 +1107,19 @@ fn test_format_yaml() {
 
     let config = Config {
         default_platform: None,
-        telemetry: Some(true),
+        telemetry: TelemetryConfig {
+            file: vec![FileTelemetryConfig::default()],
+        },
         imports: Vec::new(),
         tools,
     };
 
     // Full configuration
     let full_yaml = config.to_yaml().unwrap();
-    assert!(full_yaml.contains("telemetry: true"));
+    assert!(full_yaml.contains("telemetry:"));
+    assert!(full_yaml.contains("file:"));
+    assert!(full_yaml.contains("- {}"));
+    assert!(!full_yaml.contains("telemetry: true"));
     assert!(full_yaml.contains("node:"));
     assert!(full_yaml.contains("go:"));
     assert!(full_yaml.contains("platforms:"));
@@ -1160,7 +1170,7 @@ tools:
     // - macos_only is omitted
     let eff_linux = config.effective_for_platform(&linux_platform).unwrap();
     let linux_yaml = eff_linux.to_yaml().unwrap();
-    assert!(linux_yaml.contains("telemetry: false"));
+    assert!(!linux_yaml.contains("telemetry"));
     assert!(linux_yaml.contains("node:"));
     assert!(linux_yaml.contains("/bin/linux_node"));
     assert!(!linux_yaml.contains("/opt/homebrew/bin/node"));
@@ -1418,5 +1428,323 @@ fn test_tool_fallback_layering() {
     assert_eq!(
         layers,
         vec![Some("/bin/higher_node"), Some("/bin/lower_node")]
+    );
+}
+
+#[test]
+fn test_telemetry_config_valid_forms_and_canonical_serialization() {
+    // 1. Single-entry default object: `file: {}`
+    let cfg_default = Config::parse_str("telemetry:\n  file: {}\n").unwrap();
+    assert!(cfg_default.telemetry_enabled());
+    assert_eq!(
+        cfg_default.telemetry.file,
+        vec![FileTelemetryConfig { path: None }]
+    );
+    let yaml_default = cfg_default.to_yaml().unwrap();
+    assert!(yaml_default.contains("telemetry:"));
+    assert!(yaml_default.contains("file:"));
+    assert!(yaml_default.contains("- {}"));
+    assert_eq!(Config::parse_str(&yaml_default).unwrap(), cfg_default);
+
+    // 2. Single-entry string shorthand: `file: /var/log/scrim.log`
+    let cfg_str = Config::parse_str("telemetry:\n  file: /var/log/scrim.log\n").unwrap();
+    assert_eq!(
+        cfg_str.telemetry.file,
+        vec![FileTelemetryConfig {
+            path: Some("/var/log/scrim.log".to_string())
+        }]
+    );
+    let yaml_str = cfg_str.to_yaml().unwrap();
+    assert!(yaml_str.contains("- path: /var/log/scrim.log"));
+    assert_eq!(Config::parse_str(&yaml_str).unwrap(), cfg_str);
+
+    // 3. Single-entry structured object: `file: { path: /var/log/scrim.log }`
+    let cfg_obj =
+        Config::parse_str("telemetry:\n  file:\n    path: /var/log/scrim.log\n").unwrap();
+    assert_eq!(cfg_obj, cfg_str);
+
+    // 4. Mixed sequence
+    let cfg_seq = Config::parse_str(
+        "telemetry:\n  file:\n    - {}\n    - /var/log/a.log\n    - path: /var/log/b.log\n",
+    )
+    .unwrap();
+    assert_eq!(
+        cfg_seq.telemetry.file,
+        vec![
+            FileTelemetryConfig { path: None },
+            FileTelemetryConfig {
+                path: Some("/var/log/a.log".to_string())
+            },
+            FileTelemetryConfig {
+                path: Some("/var/log/b.log".to_string())
+            },
+        ]
+    );
+    let yaml_seq = cfg_seq.to_yaml().unwrap();
+    assert_eq!(Config::parse_str(&yaml_seq).unwrap(), cfg_seq);
+
+    // 5. Empty map / empty list -> disabled & omitted from serialization
+    let cfg_empty_map = Config::parse_str("telemetry: {}\n").unwrap();
+    assert!(!cfg_empty_map.telemetry_enabled());
+    assert!(!cfg_empty_map.to_yaml().unwrap().contains("telemetry"));
+
+    let cfg_empty_list = Config::parse_str("telemetry:\n  file: []\n").unwrap();
+    assert!(!cfg_empty_list.telemetry_enabled());
+    assert!(!cfg_empty_list.to_yaml().unwrap().contains("telemetry"));
+
+    // 6. Deprecated boolean shorthands
+    let cfg_true = Config::parse_str("telemetry: true\n").unwrap();
+    assert_eq!(cfg_true, cfg_default);
+    assert_eq!(cfg_true.to_yaml().unwrap(), yaml_default);
+
+    let cfg_false = Config::parse_str("telemetry: false\n").unwrap();
+    assert!(!cfg_false.telemetry_enabled());
+    assert!(!cfg_false.to_yaml().unwrap().contains("telemetry"));
+}
+
+#[test]
+fn test_telemetry_config_rejects_null_and_unknown_fields() {
+    for invalid_yaml in [
+        "telemetry:\n",
+        "telemetry: null\n",
+        "telemetry: []\n",
+        "telemetry: \"foo\"\n",
+        "telemetry: 123\n",
+        "telemetry:\n  file:\n",
+        "telemetry:\n  file: null\n",
+        "telemetry:\n  file: true\n",
+        "telemetry:\n  file: 123\n",
+        "telemetry:\n  file:\n    -\n",
+        "telemetry:\n  file:\n    - null\n",
+        "telemetry:\n  file:\n    - 123\n",
+        "telemetry:\n  enabled: true\n",
+        "telemetry:\n  file: {}\n  file: /tmp/a.log\n",
+        "telemetry:\n  file:\n    unknown_key: /tmp/x.log\n",
+        "telemetry:\n  file:\n    path: null\n",
+        "telemetry:\n  file:\n    path: ~\n",
+        "telemetry:\n  file:\n    path:\n",
+        "telemetry:\n  file:\n    path: 123\n",
+        "telemetry:\n  file:\n    path: true\n",
+        "telemetry:\n  file:\n    path: /tmp/a.log\n    path: /tmp/b.log\n",
+    ] {
+        let res: Result<Config, _> = serde_yaml::from_str(invalid_yaml);
+        assert!(
+            res.is_err(),
+            "Expected YAML to be rejected:\n{}",
+            invalid_yaml
+        );
+    }
+}
+
+#[test]
+fn test_telemetry_additive_layering_and_imports_deduplication() {
+    let root = tempdir().unwrap();
+
+    // User layer sets default file sink
+    let xdg_cfg = root.path().join("xdg_config");
+    let user_dir = xdg_cfg.join("scrim");
+    fs::create_dir_all(&user_dir).unwrap();
+    fs::write(user_dir.join("scrim.yaml"), "telemetry:\n  file: {}\n").unwrap();
+
+    // Repo root sets /var/log/repo.log and stops upward search via .git
+    let repo = root.path().join("repo");
+    fs::create_dir_all(repo.join(".git")).unwrap();
+    fs::write(
+        repo.join("scrim.yaml"),
+        "telemetry:\n  file: /var/log/repo.log\n",
+    )
+    .unwrap();
+
+    // Child sets deprecated `telemetry: false` and `telemetry: {}` via imports; neither disables lower sinks
+    let child = repo.join("sub");
+    fs::create_dir_all(&child).unwrap();
+    fs::write(
+        child.join("before.yaml"),
+        "telemetry:\n  file:\n    - /var/log/before.log\n    - /var/log/repo.log\n",
+    )
+    .unwrap();
+    fs::write(
+        child.join("after.yaml"),
+        "telemetry:\n  file:\n    - {}\n    - /var/log/after.log\n",
+    )
+    .unwrap();
+    fs::write(
+        child.join("scrim.yaml"),
+        "telemetry: false\nimports:\n  - before.yaml\n  - path: after.yaml\n    precedence: after\n",
+    )
+    .unwrap();
+
+    let config = load_config(&child, Some(root.path()), Some(&xdg_cfg)).unwrap();
+    assert_eq!(
+        config.telemetry.file,
+        vec![
+            FileTelemetryConfig { path: None },
+            FileTelemetryConfig {
+                path: Some("/var/log/repo.log".to_string())
+            },
+            FileTelemetryConfig {
+                path: Some("/var/log/before.log".to_string())
+            },
+            FileTelemetryConfig {
+                path: Some("/var/log/after.log".to_string())
+            },
+        ]
+    );
+
+    // Also confirm `telemetry: {}` in a higher layer does not clear lower sinks
+    let empty_override = Config::parse_str("telemetry: {}\n").unwrap();
+    let merged = config.clone().merge(empty_override);
+    assert_eq!(merged.telemetry, config.telemetry);
+}
+
+#[test]
+fn test_telemetry_runtime_path_deduplication() {
+    let cfg = Config::parse_str(
+        "telemetry:\n  file:\n    - {}\n    - /custom/state/scrim/telemetry.log\n    - /var/log//a.log\n    - /var/log/a.log/\n    - /other/telemetry.log\n",
+    )
+    .unwrap();
+    let paths = cfg.telemetry.resolve_file_paths(
+        Some(Path::new("/custom/state/")),
+        Some(Path::new("/home/user")),
+    );
+    assert_eq!(
+        paths,
+        vec![
+            PathBuf::from("/custom/state/scrim/telemetry.log"),
+            PathBuf::from("/var/log//a.log"),
+            PathBuf::from("/other/telemetry.log"),
+        ]
+    );
+}
+
+#[test]
+fn test_telemetry_relative_and_empty_paths_fault_tolerance() {
+    let dir = tempdir().unwrap();
+    let lower_yaml = dir.path().join("lower.yaml");
+    let upper_yaml = dir.path().join("upper.yaml");
+
+    fs::write(
+        &lower_yaml,
+        "telemetry:\n  file:\n    - relative/bad.log\n    - \"\"\n    - /var/log/good1.log\n",
+    )
+    .unwrap();
+    fs::write(
+        &upper_yaml,
+        "imports:\n  - lower.yaml\ntelemetry:\n  file:\n    - ./also_bad.log\n    - \"null\"\n    - path: \"null\"\n    - \"   \"\n    - /var/log/good2.log\n",
+    )
+    .unwrap();
+
+    let cfg = read_config(&upper_yaml).unwrap();
+    assert_eq!(
+        cfg.telemetry.file,
+        vec![
+            FileTelemetryConfig {
+                path: Some("/var/log/good1.log".to_string())
+            },
+            FileTelemetryConfig {
+                path: Some("/var/log/good2.log".to_string())
+            },
+        ]
+    );
+
+    // Also test Config::parse_str discards only invalid sinks
+    let parsed = Config::parse_str(
+        "telemetry:\n  file:\n    - rel.log\n    - \"\"\n    - \"null\"\n    - \"   \"\n    - {}\n",
+    )
+    .unwrap();
+    assert_eq!(
+        parsed.telemetry.file,
+        vec![FileTelemetryConfig { path: None }]
+    );
+}
+
+#[test]
+fn test_telemetry_invalid_yaml_syntactic_tolerance_retains_lower_layer() {
+    let root = tempdir().unwrap();
+    let repo = root.path().join("repo");
+    let child = repo.join("sub");
+    fs::create_dir_all(repo.join(".git")).unwrap();
+    fs::create_dir_all(&child).unwrap();
+
+    fs::write(
+        repo.join("scrim.yaml"),
+        "telemetry:\n  file: /var/log/parent.log\ntools:\n  mytool:\n    system_path: /bin/echo\n",
+    )
+    .unwrap();
+
+    // Child has bare-null `file:` -> whole child file is discarded with warning, parent retained
+    fs::write(
+        child.join("scrim.yaml"),
+        "telemetry:\n  file:\ntools:\n  broken:\n    system_path: /bin/true\n",
+    )
+    .unwrap();
+
+    let cfg = load_config(&child, Some(root.path()), None).unwrap();
+    assert!(cfg.tools.contains_key("mytool"));
+    assert!(!cfg.tools.contains_key("broken"));
+    assert_eq!(
+        cfg.telemetry.file,
+        vec![FileTelemetryConfig {
+            path: Some("/var/log/parent.log".to_string())
+        }]
+    );
+
+    // Child has unknown key under telemetry -> whole child file discarded, parent retained
+    fs::write(
+        child.join("scrim.yaml"),
+        "telemetry:\n  unknown: true\ntools:\n  broken:\n    system_path: /bin/true\n",
+    )
+    .unwrap();
+    let cfg2 = load_config(&child, Some(root.path()), None).unwrap();
+    assert!(cfg2.tools.contains_key("mytool"));
+    assert!(!cfg2.tools.contains_key("broken"));
+    assert_eq!(
+        cfg2.telemetry.file,
+        vec![FileTelemetryConfig {
+            path: Some("/var/log/parent.log".to_string())
+        }]
+    );
+}
+
+#[test]
+fn test_resolve_state_dir_and_default_telemetry_log_path() {
+    let home = Path::new("/home/user");
+    let xdg_abs = Path::new("/custom/xdg_state");
+    let xdg_rel = Path::new("custom/xdg_state");
+    let empty_path = Path::new("");
+
+    assert_eq!(
+        resolve_state_dir(Some(xdg_abs), Some(home)),
+        PathBuf::from("/custom/xdg_state/scrim")
+    );
+    assert_eq!(
+        resolve_default_telemetry_log_path(Some(xdg_abs), Some(home)),
+        PathBuf::from("/custom/xdg_state/scrim/telemetry.log")
+    );
+
+    // Relative / empty XDG_STATE_HOME fall back to $HOME/.local/state
+    assert_eq!(
+        resolve_state_dir(Some(xdg_rel), Some(home)),
+        PathBuf::from("/home/user/.local/state/scrim")
+    );
+    assert_eq!(
+        resolve_default_telemetry_log_path(Some(empty_path), Some(home)),
+        PathBuf::from("/home/user/.local/state/scrim/telemetry.log")
+    );
+
+    // None falls back to $HOME/.local/state
+    assert_eq!(
+        resolve_default_telemetry_log_path(None, Some(home)),
+        PathBuf::from("/home/user/.local/state/scrim/telemetry.log")
+    );
+
+    // HOME absent falls back to .local/state
+    assert_eq!(
+        resolve_state_dir(None, None),
+        PathBuf::from(".local/state/scrim")
+    );
+    assert_eq!(
+        resolve_default_telemetry_log_path(None, None),
+        PathBuf::from(".local/state/scrim/telemetry.log")
     );
 }
