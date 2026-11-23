@@ -735,6 +735,7 @@ fn test_config_serialization_order() {
         },
         imports: Vec::new(),
         tools,
+        warnings: Vec::new(),
     };
 
     let yaml = serde_yaml::to_string(&config).unwrap();
@@ -1112,6 +1113,7 @@ fn test_format_yaml() {
         },
         imports: Vec::new(),
         tools,
+        warnings: Vec::new(),
     };
 
     // Full configuration
@@ -1747,4 +1749,183 @@ fn test_resolve_state_dir_and_default_telemetry_log_path() {
         resolve_default_telemetry_log_path(None, None),
         PathBuf::from(".local/state/scrim/telemetry.log")
     );
+}
+
+#[test]
+fn test_config_caching_roundtrip_and_freshness() {
+    let root = tempdir().unwrap();
+    let cache_dir = tempdir().unwrap();
+    let cache_path = cache_dir.path().join("scrim/config");
+
+    let sub_config = root.path().join("sub.yaml");
+    fs::write(
+        &sub_config,
+        "default_platform: any\ntools:\n  subtool:\n    system_path: /bin/sub\n",
+    )
+    .unwrap();
+
+    let main_config = root.path().join("scrim.yaml");
+    let main_yaml = format!(
+        "default_platform: any\nimports:\n  - {}\ntools:\n  maintool:\n    system_path: /bin/main\n",
+        sub_config.display()
+    );
+    fs::write(&main_config, &main_yaml).unwrap();
+
+    // 1. Initial load with caching: both files miss cache, returning 2 pending writes
+    let (cfg1, pending1) = load_config_with_cache(
+        root.path(),
+        Some(root.path()),
+        None,
+        Some(cache_dir.path()),
+        Some("commit_a"),
+    )
+    .unwrap();
+    assert_eq!(pending1.len(), 2);
+    assert!(cfg1.tools.contains_key("maintool"));
+    assert!(cfg1.tools.contains_key("subtool"));
+
+    // Persist pending writes
+    for write in &pending1 {
+        write.persist();
+    }
+
+    // Verify cache files were created in <cache_dir>/scrim/config/
+    let entries: Vec<_> = fs::read_dir(&cache_path).unwrap().collect();
+    assert_eq!(entries.len(), 2);
+
+    // 2. Second load: both files hit cache, returning 0 pending writes
+    let (cfg2, pending2) = load_config_with_cache(
+        root.path(),
+        Some(root.path()),
+        None,
+        Some(cache_dir.path()),
+        Some("commit_a"),
+    )
+    .unwrap();
+    assert_eq!(pending2.len(), 0);
+    assert_eq!(cfg1.tools, cfg2.tools);
+
+    // 3. Modify sub.yaml: only sub.yaml misses cache, main hits cache!
+    // Ensure mtime timestamp changes
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    fs::write(
+        &sub_config,
+        "default_platform: any\ntools:\n  subtool:\n    system_path: /bin/sub_updated\n",
+    )
+    .unwrap();
+
+    let (cfg3, pending3) = load_config_with_cache(
+        root.path(),
+        Some(root.path()),
+        None,
+        Some(cache_dir.path()),
+        Some("commit_a"),
+    )
+    .unwrap();
+    assert_eq!(pending3.len(), 1); // Only sub.yaml was invalidated!
+    assert_eq!(
+        cfg3.tools.get("subtool").unwrap().platforms.get("any").unwrap().system_path.as_deref(),
+        Some("/bin/sub_updated")
+    );
+    for write in pending3 {
+        write.persist();
+    }
+
+    // 4. Invalidation on commit hash change
+    let (cfg4, pending4) = load_config_with_cache(
+        root.path(),
+        Some(root.path()),
+        None,
+        Some(cache_dir.path()),
+        Some("commit_b"),
+    )
+    .unwrap();
+    assert_eq!(pending4.len(), 2); // Different commit -> all miss!
+    assert_eq!(cfg4.tools, cfg3.tools);
+}
+
+#[test]
+fn test_config_caching_corruption_and_fail_open() {
+    let root = tempdir().unwrap();
+    let cache_dir = tempdir().unwrap();
+
+    let main_config = root.path().join("scrim.yaml");
+    fs::write(
+        &main_config,
+        "tools:\n  tool1:\n    system_path: /bin/echo\n",
+    )
+    .unwrap();
+
+    let (cfg1, pending1) = load_config_with_cache(
+        root.path(),
+        Some(root.path()),
+        None,
+        Some(cache_dir.path()),
+        None,
+    )
+    .unwrap();
+    assert_eq!(pending1.len(), 1);
+    pending1[0].persist();
+
+    // Corrupt the cache file
+    let cache_file = &pending1[0].cache_file_path;
+    assert!(cache_file.exists());
+    fs::write(cache_file, b"corrupted garbage bytes").unwrap();
+
+    // Loading should fail open: read YAML successfully and queue a pending write to heal the cache
+    let (cfg2, pending2) = load_config_with_cache(
+        root.path(),
+        Some(root.path()),
+        None,
+        Some(cache_dir.path()),
+        None,
+    )
+    .unwrap();
+    assert_eq!(cfg2.tools, cfg1.tools);
+    assert_eq!(pending2.len(), 1);
+
+    // Heal the cache
+    pending2[0].persist();
+
+    // Now it hits cleanly
+    let (cfg3, pending3) = load_config_with_cache(
+        root.path(),
+        Some(root.path()),
+        None,
+        Some(cache_dir.path()),
+        None,
+    )
+    .unwrap();
+    assert_eq!(cfg3.tools, cfg1.tools);
+    assert_eq!(pending3.len(), 0);
+}
+
+#[test]
+fn test_config_caching_unwritable_cache_dir_fail_open() {
+    let root = tempdir().unwrap();
+    let bad_cache_dir = root.path().join("unwritable_file");
+    // Create a regular file where the directory is expected so create_dir_all fails
+    fs::write(&bad_cache_dir, b"not a directory").unwrap();
+
+    let main_config = root.path().join("scrim.yaml");
+    fs::write(
+        &main_config,
+        "tools:\n  tool1:\n    system_path: /bin/echo\n",
+    )
+    .unwrap();
+
+    // Should succeed loading config from YAML without panicking
+    let (cfg, pending) = load_config_with_cache(
+        root.path(),
+        Some(root.path()),
+        None,
+        Some(&bad_cache_dir),
+        None,
+    )
+    .unwrap();
+    assert!(cfg.tools.contains_key("tool1"));
+    assert_eq!(pending.len(), 1);
+
+    // Persisting to an unwritable location must fail open silently without panic
+    pending[0].persist();
 }

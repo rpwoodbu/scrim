@@ -2,9 +2,9 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-/// Redirects standard I/O in the forked telemetry child to `/dev/null` (closing as a
+/// Redirects standard I/O in the forked auxiliary child to `/dev/null` (closing as a
 /// fallback) so callers capturing tool output via pipes never block waiting for EOF.
-fn detach_stdio() {
+pub fn detach_stdio() {
     unsafe {
         let devnull = libc::open(b"/dev/null\0".as_ptr() as *const libc::c_char, libc::O_RDWR);
         if devnull >= 0 {

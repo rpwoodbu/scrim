@@ -4236,3 +4236,82 @@ fn test_e2e_telemetry_write_failure_isolation() {
     let log_content = poll_log_contains(&valid_log, "\"tool\": \"my_tool\"");
     assert!(log_content.contains(&format!("\"target\": \"{}\"", local_tool.display())));
 }
+
+#[test]
+fn test_e2e_config_caching_proxy_background_persistence() {
+    let scrim_bin = find_scrim_bin();
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+    fs::create_dir_all(temp_path.join(".git")).unwrap();
+
+    let local_tool = temp_path.join("real_tool");
+    fs::write(&local_tool, "#!/bin/sh\necho \"cached proxy run ok\"\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&local_tool).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&local_tool, perms).unwrap();
+    }
+
+    let config_home = temp_path.join("xdg_config");
+    let cache_home = temp_path.join("xdg_cache");
+    let state_home = temp_path.join("xdg_state");
+
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    fs::write(
+        &scrim_yaml,
+        format!(
+            "default_platform: any\ntools:\n  my_tool:\n    system_path: \"{}\"\n",
+            local_tool.display()
+        ),
+    )
+    .unwrap();
+
+    let shim = temp_path.join("my_tool");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &shim).unwrap();
+
+    // 1. Initial proxy invocation: execution succeeds immediately
+    let out = Command::new(&shim)
+        .current_dir(temp_path)
+        .env("HOME", temp_path)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_CACHE_HOME", &cache_home)
+        .env("XDG_STATE_HOME", &state_home)
+        .output()
+        .unwrap();
+
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "cached proxy run ok\n");
+
+    // The background child should have persisted the parsed config cache under <cache_home>/scrim/config/<hash>.bin
+    let config_cache_dir = cache_home.join("scrim/config");
+    let start = std::time::Instant::now();
+    let timeout = std::time::Duration::from_secs(5);
+    let mut cache_file_found = false;
+    while start.elapsed() < timeout {
+        if let Ok(entries) = fs::read_dir(&config_cache_dir) {
+            let files: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+            if !files.is_empty() {
+                cache_file_found = true;
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(cache_file_found, "Expected config cache file to be created in {:?}", config_cache_dir);
+
+    // 2. Second proxy invocation hits binary cache
+    let out2 = Command::new(&shim)
+        .current_dir(temp_path)
+        .env("HOME", temp_path)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_CACHE_HOME", &cache_home)
+        .env("XDG_STATE_HOME", &state_home)
+        .output()
+        .unwrap();
+
+    assert!(out2.status.success());
+    assert_eq!(String::from_utf8_lossy(&out2.stdout), "cached proxy run ok\n");
+}

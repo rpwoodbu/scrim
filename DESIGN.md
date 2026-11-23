@@ -275,6 +275,18 @@ When a command (e.g., `node`) is invoked, Scrim follows this resolution logic:
         8. Empty tool configurations are invalid. Every tool must specify a `system_path`, a `url` (with a digest), or a `template` (either via `default_platform` or under `platforms`). If neither `default_platform` nor `platforms` is provided when platform-specific fields are defined, configuration validation fails with an actionable error.
         9. Mixing tool-level platform properties with a `platforms` map within the same tool is forbidden.
 
+    - **Configuration Caching**:
+      - To eliminate YAML parsing overhead on repeat invocations, Scrim caches parsed configuration ASTs in binary format (`bincode`) under `<resolved_cache_dir>/config/`.
+      - **Per-File Caching**: Caching operates on individual configuration files (`/etc/scrim/scrim.yaml`, `$XDG_CONFIG_HOME/scrim/scrim.yaml`, workspace `scrim.yaml` files, and imported files). Each configuration file's parsed representation is cached independently, keyed by the SHA-256 hash of its canonical path (`<sha256(canonical_path)>.bin`).
+      - **Freshness & Invalidation**: When reading a configuration file, Scrim inspects the cache entry header:
+        - Scrim compares the recorded source file modification time (`mtime`) and file size (`size`) against the filesystem `stat` of the source YAML file.
+        - The cache entry also records a cache schema version and Scrim version/commit identifier. If the Scrim binary or cache format changes, existing cache entries are automatically treated as misses.
+        - If `mtime`, `size`, and version match, Scrim deserializes the cached AST directly via `bincode`, bypassing YAML text tokenization and parsing entirely.
+        - If the cache entry is missing, corrupted, or stale, Scrim parses the YAML file, applies file-scoped desugaring, and writes an updated cache entry.
+      - **Atomic Updates & Concurrency**: Cache writes use atomic replacement: Scrim writes the binary payload to a unique temporary file in the cache directory and renames it to the target cache filename. This prevents concurrent proxy processes from observing partially written cache files.
+      - **Post-Fork Background Persistence**: On tool execution paths (proxy shims and `scrim run`), all work related to persisting cache updates—including binary serialization via `bincode`, temporary file creation, and atomic filesystem renames—is deferred to run post-`fork()` in the background child process. The parent process immediately calls `execve()` for the target tool without waiting for cache encoding or disk I/O. For commands without tool execution (e.g., `scrim config`, `scrim links`), cache writes occur synchronously.
+      - **Fault Tolerance**: Configuration caching is strictly an optimization. If cache reads or writes fail for any reason (e.g., read-only filesystem, permission denial, corrupted binary data), Scrim fails open: it silently falls back to standard YAML parsing and execution proceeds without interruption.
+
 3.  **Execution**:
     - If the tool specifies both a `system_path` and fetch configuration (or template):
       - At execution time, Scrim checks whether the executable at `system_path` exists on the filesystem. If it exists, Scrim uses the local executable directly.
@@ -307,15 +319,19 @@ When a command (e.g., `node`) is invoked, Scrim follows this resolution logic:
 ### Execution
 To minimize overhead, Scrim will use `execve` (on Unix) to replace the current process with the target tool process. This ensures there is no "parent" Scrim process hanging around during tool execution. If `execve` returns (indicating invocation failure for any reason, such as permission denial, format error, or corrupted binary), Scrim reports an attributed error and terminates with exit status `126` following standard POSIX conventions ([POSIX.1-2017 Section 2.8.2][posix-shell-exit]).
 
-### Telemetry Hook
-Telemetry is gathered to track tool usage patterns.
+### Auxiliary Background Tasks (Telemetry & Cache Persistence)
+Telemetry gathering and configuration cache updates run as non-blocking background tasks during tool execution.
 - **Constraint**: Must never block or cause the tool to fail.
 - **Implementation**:
-    - If no telemetry sinks are configured in the aggregated configuration, Scrim skips telemetry completely (no `fork()`).
+    - If no telemetry sinks are configured and no configuration files require cache updates, Scrim skips forking completely (no `fork()`).
     - Otherwise, Scrim calls `fork()` **once** before executing the target tool.
     - The **Parent** process immediately calls `execve()` for the target tool to preserve the original PID and environment.
-    - The **Child** process detaches inherited standard I/O (`stdin`, `stdout`, and `stderr` redirected to `/dev/null` or closed) so callers capturing output via pipes never block waiting for EOF from the telemetry child. It then creates any missing parent directories, formats the JSON log entry once, appends it to each unique resolved file sink (silently ignoring any filesystem or I/O errors), and exits immediately via `_exit(0)`.
-    - All directory creation and file I/O occur strictly in the background child process, keeping telemetry completely decoupled from the target tool's blocking execution path.
+    - The **Child** process detaches inherited standard I/O (`stdin`, `stdout`, and `stderr` redirected to `/dev/null` or closed) so callers capturing output via pipes never block waiting for EOF from the child. It then executes any pending auxiliary work:
+        1. **Configuration Cache Persistence**: Serializes newly parsed configuration ASTs via `bincode` and atomically writes them to `<resolved_cache_dir>/config/`.
+        2. **Telemetry Logging**: Creates any missing parent directories, formats the JSON log entry once, and appends it to each unique resolved file sink.
+        All filesystem, serialization, and I/O errors in the child process are silently ignored.
+    - The child process terminates immediately via `_exit(0)`.
+    - All directory creation, binary serialization, and file I/O occur strictly in the background child process, keeping auxiliary operations completely decoupled from the target tool's blocking execution path.
 - **PATH Fallback Invocations**:
     - When a tool is executed via PATH fallback (for undefined tools), telemetry usage is recorded if at least one telemetry sink is configured in the active configuration.
     - The telemetry log entry retains the standard JSON structure (`tool`, `target`, `timestamp`), recording the tool name and the resolved path to the system binary (e.g., `{"tool": "node", "target": "/usr/bin/node", "timestamp": "..."}`).

@@ -1,8 +1,10 @@
 pub use platform::{Arch, Os, Platform};
+pub use cache::*;
 
 use logger::scrim_warn;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -655,6 +657,8 @@ pub struct Config {
     pub imports: Vec<ImportEntry>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub tools: BTreeMap<String, ToolConfig>,
+    #[serde(skip)]
+    pub warnings: Vec<String>,
 }
 
 impl Config {
@@ -690,6 +694,7 @@ impl Config {
             telemetry: self.telemetry.clone(),
             imports: Vec::new(),
             tools: effective_tools,
+            warnings: self.warnings.clone(),
         })
     }
 
@@ -716,7 +721,11 @@ impl Config {
     }
 }
 
-fn sanitize_telemetry(telemetry: &mut TelemetryConfig, file_context: Option<&Path>) {
+fn sanitize_telemetry(
+    telemetry: &mut TelemetryConfig,
+    warnings: &mut Vec<String>,
+    file_context: Option<&Path>,
+) {
     let mut sanitized_file_sinks = Vec::with_capacity(telemetry.file.len());
     for sink in std::mem::take(&mut telemetry.file) {
         if let Some(ref p) = sink.path {
@@ -733,7 +742,9 @@ fn sanitize_telemetry(telemetry: &mut TelemetryConfig, file_context: Option<&Pat
                         p
                     )
                 };
-                scrim_warn!("{}. Ignoring telemetry sink.", msg);
+                let full_warn = format!("{}. Ignoring telemetry sink.", msg);
+                scrim_warn!("{}", full_warn);
+                warnings.push(full_warn);
                 continue;
             }
         }
@@ -748,7 +759,7 @@ pub fn desugar_file_tools(
     config: &mut Config,
     file_context: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    sanitize_telemetry(&mut config.telemetry, file_context);
+    sanitize_telemetry(&mut config.telemetry, &mut config.warnings, file_context);
 
     let default_platform = config.default_platform.take();
     let valid_dp = if let Some(ref dp) = default_platform {
@@ -760,7 +771,9 @@ pub fn desugar_file_tools(
                 } else {
                     format!("Invalid default_platform: {}", e)
                 };
-                scrim_warn!("{}. Ignoring default_platform.", msg);
+                let full_warn = format!("{}. Ignoring default_platform.", msg);
+                scrim_warn!("{}", full_warn);
+                config.warnings.push(full_warn);
                 None
             }
         }
@@ -820,12 +833,62 @@ pub fn load_config(
     home_dir: Option<&Path>,
     xdg_config_env: Option<&Path>,
 ) -> Result<Config, Box<dyn std::error::Error>> {
+    let mut pending = Vec::new();
+    let config = load_config_internal(
+        start_path,
+        home_dir,
+        xdg_config_env,
+        None,
+        None,
+        &mut pending,
+    )?;
+    for write in pending {
+        write.persist();
+    }
+    Ok(config)
+}
+
+pub fn load_config_with_cache(
+    start_path: &Path,
+    home_dir: Option<&Path>,
+    xdg_config_env: Option<&Path>,
+    xdg_cache_env: Option<&Path>,
+    commit_hash: Option<&str>,
+) -> Result<(Config, Vec<PendingCacheWrite>), Box<dyn std::error::Error>> {
+    let cache_dir = resolve_config_cache_dir(xdg_cache_env, home_dir);
+    let mut pending = Vec::new();
+    let config = load_config_internal(
+        start_path,
+        home_dir,
+        xdg_config_env,
+        Some(&cache_dir),
+        commit_hash,
+        &mut pending,
+    )?;
+    Ok((config, pending))
+}
+
+pub fn load_config_internal(
+    start_path: &Path,
+    home_dir: Option<&Path>,
+    xdg_config_env: Option<&Path>,
+    cache_dir: Option<&Path>,
+    commit_hash: Option<&str>,
+    pending_writes: &mut Vec<PendingCacheWrite>,
+) -> Result<Config, Box<dyn std::error::Error>> {
     let mut config = Config::default();
 
     // 1. System-Level Configuration
     let sys_config_path = Path::new("/etc/scrim/scrim.yaml");
     if sys_config_path.exists() {
-        let c = read_config(sys_config_path)?;
+        let mut import_stack = Vec::new();
+        let c = read_config_internal(
+            sys_config_path,
+            &mut import_stack,
+            cache_dir,
+            commit_hash,
+            pending_writes,
+        )?;
         config = config.merge(c);
     }
 
@@ -833,7 +896,14 @@ pub fn load_config(
     let user_config_dir = resolve_config_dir(xdg_config_env, home_dir);
     let user_config_path = user_config_dir.join("scrim/scrim.yaml");
     if user_config_path.exists() {
-        let c = read_config(&user_config_path)?;
+        let mut import_stack = Vec::new();
+        let c = read_config_internal(
+            &user_config_path,
+            &mut import_stack,
+            cache_dir,
+            commit_hash,
+            pending_writes,
+        )?;
         config = config.merge(c);
     }
 
@@ -859,7 +929,14 @@ pub fn load_config(
 
     // Reverse so parents are merged before children
     for path in search_paths.into_iter().rev() {
-        let c = read_config(&path)?;
+        let mut import_stack = Vec::new();
+        let c = read_config_internal(
+            &path,
+            &mut import_stack,
+            cache_dir,
+            commit_hash,
+            pending_writes,
+        )?;
         config = config.merge(c);
     }
 
@@ -868,12 +945,31 @@ pub fn load_config(
 
 pub fn read_config(path: &Path) -> Result<Config, Box<dyn std::error::Error>> {
     let mut import_stack = Vec::new();
-    read_config_internal(path, &mut import_stack)
+    let mut pending = Vec::new();
+    let config = read_config_internal(path, &mut import_stack, None, None, &mut pending)?;
+    for write in pending {
+        write.persist();
+    }
+    Ok(config)
+}
+
+pub fn read_config_with_cache(
+    path: &Path,
+    cache_dir: Option<&Path>,
+    commit_hash: Option<&str>,
+) -> Result<(Config, Vec<PendingCacheWrite>), Box<dyn std::error::Error>> {
+    let mut import_stack = Vec::new();
+    let mut pending = Vec::new();
+    let config = read_config_internal(path, &mut import_stack, cache_dir, commit_hash, &mut pending)?;
+    Ok((config, pending))
 }
 
 fn read_config_internal(
     path: &Path,
     import_stack: &mut Vec<PathBuf>,
+    cache_dir: Option<&Path>,
+    commit_hash: Option<&str>,
+    pending_writes: &mut Vec<PendingCacheWrite>,
 ) -> Result<Config, Box<dyn std::error::Error>> {
     let canonical = path.canonicalize().map_err(|e| {
         format!(
@@ -898,35 +994,77 @@ fn read_config_internal(
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("/"));
 
-    import_stack.push(canonical);
+    import_stack.push(canonical.clone());
 
-    let content = match std::fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(e) => {
-            scrim_warn!(
-                "Failed to read configuration file '{}': {}. Ignoring file.",
-                path.display(),
-                e
-            );
-            import_stack.pop();
-            return Ok(Config::default());
+    let mut parsed_opt: Option<Config> = None;
+    let mut source_stat_opt: Option<(u64, u32, u64)> = None;
+    let mut cache_file_opt: Option<PathBuf> = None;
+
+    if let Some(c_dir) = cache_dir {
+        let cache_file = c_dir.join(cache_file_name_for_path(&canonical));
+        cache_file_opt = Some(cache_file.clone());
+
+        if let Ok(meta) = std::fs::metadata(&canonical) {
+            let mtime_secs = meta.mtime() as u64;
+            let mtime_nanos = meta.mtime_nsec() as u32;
+            let size = meta.len();
+            source_stat_opt = Some((mtime_secs, mtime_nanos, size));
+
+            if let Some(cached_file) = try_read_cache(&cache_file, mtime_secs, mtime_nanos, size, commit_hash) {
+                for w in &cached_file.warnings {
+                    scrim_warn!("{}", w);
+                }
+                parsed_opt = Some(Config::from(cached_file));
+            }
+        }
+    }
+
+    let parsed = match parsed_opt {
+        Some(p) => p,
+        None => {
+            let content = match std::fs::read_to_string(path) {
+                Ok(c) => c,
+                Err(e) => {
+                    scrim_warn!(
+                        "Failed to read configuration file '{}': {}. Ignoring file.",
+                        path.display(),
+                        e
+                    );
+                    import_stack.pop();
+                    return Ok(Config::default());
+                }
+            };
+
+            let mut p: Config = match serde_yaml::from_str(&content) {
+                Ok(c) => c,
+                Err(e) => {
+                    scrim_warn!(
+                        "Failed to parse configuration file '{}': {}. Ignoring file.",
+                        path.display(),
+                        e
+                    );
+                    import_stack.pop();
+                    return Ok(Config::default());
+                }
+            };
+
+            desugar_file_tools(&mut p, Some(path))?;
+
+            if let (Some(cache_file), Some((mtime_secs, mtime_nanos, size))) = (cache_file_opt, source_stat_opt) {
+                let cached_dto = CachedFileConfig::from(&p);
+                pending_writes.push(PendingCacheWrite {
+                    cache_file_path: cache_file,
+                    source_mtime_secs: mtime_secs,
+                    source_mtime_nanos: mtime_nanos,
+                    source_size: size,
+                    cached_config: cached_dto,
+                    commit_hash: clean_commit_hash(commit_hash),
+                });
+            }
+
+            p
         }
     };
-
-    let mut parsed: Config = match serde_yaml::from_str(&content) {
-        Ok(c) => c,
-        Err(e) => {
-            scrim_warn!(
-                "Failed to parse configuration file '{}': {}. Ignoring file.",
-                path.display(),
-                e
-            );
-            import_stack.pop();
-            return Ok(Config::default());
-        }
-    };
-
-    desugar_file_tools(&mut parsed, Some(path))?;
 
     let mut before_config = Config::default();
     let mut after_config = Config::default();
@@ -952,7 +1090,13 @@ fn read_config_internal(
             }
         }
 
-        let imported = read_config_internal(&target_path, import_stack)?;
+        let imported = read_config_internal(
+            &target_path,
+            import_stack,
+            cache_dir,
+            commit_hash,
+            pending_writes,
+        )?;
         match import_entry.precedence() {
             ImportPrecedence::Before => {
                 before_config = before_config.merge(imported);
@@ -970,6 +1114,7 @@ fn read_config_internal(
         telemetry: parsed.telemetry,
         imports: Vec::new(),
         tools: parsed.tools,
+        warnings: parsed.warnings,
     };
 
     let result = before_config.merge(current_file_clean).merge(after_config);
@@ -1005,6 +1150,13 @@ pub fn resolve_cache_dir(
     resolve_xdg_base_dir(xdg_cache_env, home_dir, ".cache").join("scrim")
 }
 
+pub fn resolve_config_cache_dir(
+    xdg_cache_env: Option<&Path>,
+    home_dir: Option<&Path>,
+) -> PathBuf {
+    resolve_cache_dir(xdg_cache_env, home_dir).join("config")
+}
+
 pub fn resolve_state_dir(
     xdg_state_env: Option<&Path>,
     home_dir: Option<&Path>,
@@ -1017,5 +1169,135 @@ pub fn resolve_default_telemetry_log_path(
     home_dir: Option<&Path>,
 ) -> PathBuf {
     resolve_state_dir(xdg_state_env, home_dir).join("telemetry.log")
+}
+
+impl From<&Config> for CachedFileConfig {
+    fn from(cfg: &Config) -> Self {
+        Self {
+            telemetry: CachedTelemetryConfig {
+                file: cfg
+                    .telemetry
+                    .file
+                    .iter()
+                    .map(|f| CachedFileTelemetryConfig {
+                        path: f.path.clone(),
+                    })
+                    .collect(),
+            },
+            imports: cfg
+                .imports
+                .iter()
+                .map(|imp| CachedImportEntry {
+                    path: imp.path().to_string(),
+                    optional: imp.optional(),
+                    precedence: match imp.precedence() {
+                        ImportPrecedence::Before => CachedImportPrecedence::Before,
+                        ImportPrecedence::After => CachedImportPrecedence::After,
+                    },
+                })
+                .collect(),
+            tools: cfg
+                .tools
+                .iter()
+                .map(|(name, tool)| {
+                    (
+                        name.clone(),
+                        CachedToolConfig {
+                            template: tool.template.clone(),
+                            archive_path: tool.archive_path.clone(),
+                            platforms: tool
+                                .platforms
+                                .iter()
+                                .map(|(plat, p_cfg)| {
+                                    (
+                                        plat.clone(),
+                                        CachedPlatformToolConfig {
+                                            system_path: p_cfg.system_path.clone(),
+                                            url: p_cfg.url.clone(),
+                                            sha256: p_cfg.sha256.clone(),
+                                            sha512: p_cfg.sha512.clone(),
+                                            archive_path: p_cfg.archive_path.clone(),
+                                        },
+                                    )
+                                })
+                                .collect(),
+                            system_path: tool.system_path.clone(),
+                            url: tool.url.clone(),
+                            sha256: tool.sha256.clone(),
+                            sha512: tool.sha512.clone(),
+                            desugar_error: tool.desugar_error.clone(),
+                        },
+                    )
+                })
+                .collect(),
+            warnings: cfg.warnings.clone(),
+        }
+    }
+}
+
+impl From<CachedFileConfig> for Config {
+    fn from(cached: CachedFileConfig) -> Self {
+        Self {
+            default_platform: None,
+            telemetry: TelemetryConfig {
+                file: cached
+                    .telemetry
+                    .file
+                    .into_iter()
+                    .map(|f| FileTelemetryConfig { path: f.path })
+                    .collect(),
+            },
+            imports: cached
+                .imports
+                .into_iter()
+                .map(|imp| {
+                    ImportEntry::Structured(ImportObject {
+                        path: imp.path,
+                        optional: imp.optional,
+                        precedence: match imp.precedence {
+                            CachedImportPrecedence::Before => ImportPrecedence::Before,
+                            CachedImportPrecedence::After => ImportPrecedence::After,
+                        },
+                    })
+                })
+                .collect(),
+            tools: cached
+                .tools
+                .into_iter()
+                .map(|(name, tool)| {
+                    (
+                        name,
+                        ToolConfig {
+                            template: tool.template,
+                            archive_path: tool.archive_path,
+                            platforms: tool
+                                .platforms
+                                .into_iter()
+                                .map(|(plat, p_cfg)| {
+                                    (
+                                        plat,
+                                        PlatformToolConfig {
+                                            system_path: p_cfg.system_path,
+                                            url: p_cfg.url,
+                                            sha256: p_cfg.sha256,
+                                            sha512: p_cfg.sha512,
+                                            archive_path: p_cfg.archive_path,
+                                        },
+                                    )
+                                })
+                                .collect(),
+                            system_path: tool.system_path,
+                            url: tool.url,
+                            sha256: tool.sha256,
+                            sha512: tool.sha512,
+                            fallback: None,
+                            desugar_error: tool.desugar_error,
+                        },
+                    )
+                })
+                .collect(),
+            warnings: cached.warnings,
+        }
+    }
 }
 

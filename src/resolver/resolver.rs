@@ -145,6 +145,7 @@ pub fn resolve_effective_config_for_platform(
             telemetry: config.telemetry.clone(),
             imports: Vec::new(),
             tools: effective_tools,
+            warnings: config.warnings.clone(),
         },
         errors,
     }

@@ -12,8 +12,10 @@ rust_library(
         "//benches:__pkg__",
     ],
     deps = [
+        ":cache",
         ":platform",
         "//src/logger",
+        "//src/version",
         "@crates//:serde",
         "@crates//:serde_with",
         "@crates//:serde_yaml",
@@ -27,6 +29,36 @@ rust_test(
     deps = [
         ":config",
         "@crates//:serde_yaml",
+        "@crates//:tempfile",
+    ],
+)
+
+rust_library(
+    name = "cache",
+    srcs = ["cache.rs"],
+    crate_root = "cache.rs",
+    edition = "2021",
+    visibility = [
+        "//src/bin:__pkg__",
+        "//src/config:__pkg__",
+        "//tests:__pkg__",
+    ],
+    deps = [
+        "//src/version",
+        "@crates//:bincode",
+        "@crates//:serde",
+        "@crates//:sha2",
+    ],
+)
+
+rust_test(
+    name = "cache_test",
+    srcs = ["cache_test.rs"],
+    edition = "2021",
+    deps = [
+        ":cache",
+        "//src/version",
+        "@crates//:bincode",
         "@crates//:tempfile",
     ],
 )

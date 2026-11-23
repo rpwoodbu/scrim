@@ -5,7 +5,6 @@ use linker::create_links;
 use logger::scrim_error;
 use lookup::find_in_path;
 use resolver::{resolve_tool_for_platform_with_fallback, Resolution};
-use telemetry::report_usage;
 use version::format_version;
 
 use std::env;
@@ -64,7 +63,9 @@ impl AppEnvironment {
 
 const BINARY_COMMIT: Option<&str> = option_env!("SCRIM_GIT_COMMIT");
 
-fn load_configuration(app_env: &AppEnvironment) -> Config {
+fn load_configuration_with_writes(
+    app_env: &AppEnvironment,
+) -> (Config, Vec<config::PendingCacheWrite>) {
     let cwd = match env::current_dir() {
         Ok(dir) => dir,
         Err(e) => {
@@ -72,17 +73,27 @@ fn load_configuration(app_env: &AppEnvironment) -> Config {
             std::process::exit(1);
         }
     };
-    match config::load_config(
+    match config::load_config_with_cache(
         &cwd,
         app_env.home_dir.as_deref(),
         app_env.xdg_config_home.as_deref(),
+        app_env.xdg_cache_home.as_deref(),
+        BINARY_COMMIT,
     ) {
-        Ok(c) => c,
+        Ok(res) => res,
         Err(e) => {
             scrim_error!("{}", e);
             std::process::exit(1);
         }
     }
+}
+
+fn load_configuration(app_env: &AppEnvironment) -> Config {
+    let (config, pending) = load_configuration_with_writes(app_env);
+    for write in pending {
+        write.persist();
+    }
+    config
 }
 
 fn handle_management_command(args: &[std::ffi::OsString], app_env: &AppEnvironment) {
@@ -215,7 +226,7 @@ fn handle_management_command(args: &[std::ffi::OsString], app_env: &AppEnvironme
 
 fn proxy_command(program_name: &str, args: &[std::ffi::OsString], app_env: &AppEnvironment) -> ! {
     let tool_args = if args.len() > 1 { &args[1..] } else { &[] };
-    let config = load_configuration(app_env);
+    let (config, pending_cache_writes) = load_configuration_with_writes(app_env);
 
     if !config.tools.contains_key(program_name) {
         if let Some(target_path) = find_in_path(
@@ -223,7 +234,14 @@ fn proxy_command(program_name: &str, args: &[std::ffi::OsString], app_env: &AppE
             app_env.path.as_deref(),
             app_env.current_exe.as_deref(),
         ) {
-            execute_binary(program_name, &target_path, tool_args, &config.telemetry, app_env);
+            execute_binary(
+                program_name,
+                &target_path,
+                tool_args,
+                &config.telemetry,
+                &pending_cache_writes,
+                app_env,
+            );
         } else {
             scrim_error!("{}: command not found", program_name);
             std::process::exit(127);
@@ -239,7 +257,14 @@ fn proxy_command(program_name: &str, args: &[std::ffi::OsString], app_env: &AppE
     };
     let target_path =
         resolve_target_binary_path(program_name, &config, &host_platform, app_env, true, false);
-    execute_binary(program_name, &target_path, tool_args, &config.telemetry, app_env);
+    execute_binary(
+        program_name,
+        &target_path,
+        tool_args,
+        &config.telemetry,
+        &pending_cache_writes,
+        app_env,
+    );
 }
 
 fn execute_tool(
@@ -255,7 +280,7 @@ fn execute_tool(
             std::process::exit(1);
         }
     };
-    let config = load_configuration(app_env);
+    let (config, pending_cache_writes) = load_configuration_with_writes(app_env);
     let target_path = resolve_target_binary_path(
         program_name,
         &config,
@@ -264,7 +289,14 @@ fn execute_tool(
         true,
         allow_fallback,
     );
-    execute_binary(program_name, &target_path, tool_args, &config.telemetry, app_env);
+    execute_binary(
+        program_name,
+        &target_path,
+        tool_args,
+        &config.telemetry,
+        &pending_cache_writes,
+        app_env,
+    );
 }
 
 fn execute_binary(
@@ -272,6 +304,7 @@ fn execute_binary(
     target_path: &Path,
     tool_args: &[std::ffi::OsString],
     telemetry: &config::TelemetryConfig,
+    pending_cache_writes: &[config::PendingCacheWrite],
     app_env: &AppEnvironment,
 ) -> ! {
     // Prepare the command
@@ -282,13 +315,12 @@ fn execute_binary(
         cmd.args(tool_args);
     }
 
-    // Report usage in the background (non-blocking) if any telemetry sinks are configured
     let telemetry_paths = telemetry.resolve_file_paths(
         app_env.xdg_state_home.as_deref(),
         app_env.home_dir.as_deref(),
     );
-    if !telemetry_paths.is_empty() {
-        report_usage(program_name, target_path, &telemetry_paths);
+    if !telemetry_paths.is_empty() || !pending_cache_writes.is_empty() {
+        spawn_auxiliary_child(program_name, target_path, &telemetry_paths, pending_cache_writes);
     }
 
     // Replace the current process with the target tool
@@ -297,6 +329,27 @@ fn execute_binary(
     // If exec returns, it failed
     scrim_error!("Failed to execute tool: {}", err);
     std::process::exit(126);
+}
+
+fn spawn_auxiliary_child(
+    program_name: &str,
+    target_path: &Path,
+    telemetry_paths: &[PathBuf],
+    pending_cache_writes: &[config::PendingCacheWrite],
+) {
+    let pid = unsafe { libc::fork() };
+    if pid == 0 {
+        telemetry::detach_stdio();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for write in pending_cache_writes {
+                write.persist();
+            }
+            if !telemetry_paths.is_empty() {
+                telemetry::write_usage_to_files(program_name, target_path, telemetry_paths);
+            }
+        }));
+        unsafe { libc::_exit(0) };
+    }
 }
 
 fn which_tool(
