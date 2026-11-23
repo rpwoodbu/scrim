@@ -31,7 +31,7 @@
 
 When invoked directly as `scrim` (i.e., `argv[0]` is `scrim`), Scrim provides a management CLI rather than proxying a tool. CLI arguments are parsed using `clap`. Running `scrim` without any arguments will display usage information and available commands. Scrim will fail with an error if the user provides any invalid arguments or undefined flags. The main help output also documents supported environment variables (e.g., `XDG_CACHE_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`). The CLI supports the following commands:
 - `help`: Displays usage information and available commands.
-- `version`: Displays the version of Scrim. If built with workspace status stamping (e.g., release builds), it outputs the release commit hash alongside the semantic version in the format `scrim <version> (<commit_hash>)`. In unstamped builds, it outputs `scrim <version>`.
+- `version`: Displays the version of Scrim. If built with workspace status stamping (e.g., release builds), it outputs the release commit hash alongside the semantic version in the format `scrim <version> (<commit_hash>)`. In unstamped builds, it outputs `scrim <version> (dev)`.
 - `config`: Reports the resultant aggregated configuration after resolving all configuration layers, or reports a specific tool's configuration if an optional tool name argument is provided. Unspecified fields and empty collections are omitted from the output to reduce noise.
 - `links`: Updates links in a specified target directory for all defined tools to point to the `scrim` binary.
 - `run`: Runs a defined tool directly without requiring a link.
