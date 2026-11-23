@@ -3,14 +3,15 @@ You MUST read and understand the `DESIGN.md` file before proceeding with any tas
 
 ### Review Process
 All changes MUST receive explicit human review BEFORE they are committed. You MUST review your own work, consult these guidelines, and ensure they have not been violated before seeking human review.
+A subagent review is required for non-trivial changes to verify logic and catch potential regressions.
 
 When participating in a design discussion or proposing design changes, you MUST edit `DESIGN.md` directly with the proposed changes and ask the user to review the file itself; NEVER ask the user to review design proposals printed in conversation. You MUST NOT proceed to make any code changes until the user (a human) has explicitly reviewed and approved the design changes in `DESIGN.md`.
 
 ### Repository Hygiene
 Keep the history clean. Follow these rules to achieve this:
-* Commits on `main` MUST be complete, including any test or documentation changes relevant to the change. You MUST NOT commit code to `main` without ensuring its behavior is tested.
+* Commits MUST be complete, including any test or documentation changes relevant to the change. You MUST NOT commit code without ensuring its behavior is tested.
 * Yet commits should be small and targeted. Separate concerns deserve separate commits.
-* All tests MUST pass on each commit on `main`.
+* All tests MUST pass on each commit.
 * Commit messages MUST be descriptive and clearly explain the 'why' and 'how' of the change.
 * When modifying dependencies (e.g., `MODULE.bazel`), you MUST run a build/test and include any resulting lockfile updates (e.g., `MODULE.bazel.lock`) in the same commit.
 * It is appropriate to amend unpushed commits to incorporate fixes that should have been included originally.
