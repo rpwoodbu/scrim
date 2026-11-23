@@ -1,6 +1,5 @@
 use backhand::{FilesystemCompressor, FilesystemWriter, NodeHeader, compression::Compressor};
 use std::env;
-use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
@@ -114,5 +113,46 @@ pub fn create_fake_appimage(path: &Path, files: &[(&str, &[u8], u16)], symlinks:
     sqfs_writer.write(&mut sqfs_bytes).unwrap();
     stub.extend_from_slice(&sqfs_bytes.into_inner());
 
-    fs::write(path, &stub).unwrap();
+    write_executable(path, &stub);
+}
+
+/// Writes an executable file (or script) in a child process so that the parent test runner
+/// process never holds an open writable file descriptor to it.
+///
+/// In multi-threaded test runners, writing an executable directly in-process can leak an open
+/// write descriptor if another thread concurrently calls `fork()`. This triggers transient
+/// `ETXTBSY` ("Text file busy") when the newly created file is subsequently executed. By
+/// delegating the write to a child process that exits before this function returns, the
+/// parent process never has an open write handle to leak.
+pub fn write_executable(path: &Path, content: impl AsRef<[u8]>) {
+    let mut child = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("cat > \"$1\" && chmod 755 -- \"$1\"")
+        .arg("--")
+        .arg(path)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .expect("Failed to spawn writer child process");
+
+    use std::io::Write;
+    child
+        .stdin
+        .take()
+        .expect("Failed to open stdin for writer")
+        .write_all(content.as_ref())
+        .expect("Failed to write content to writer child");
+
+    let status = child.wait().expect("Failed to wait on writer child");
+    assert!(status.success(), "Failed to write executable to {:?}", path);
+}
+
+/// Copies an executable binary in a child process (`cp`) so the parent test process
+/// never opens the destination file for writing.
+pub fn copy_executable(src: &Path, dst: &Path) {
+    let status = std::process::Command::new("cp")
+        .args(["--"])
+        .args([src, dst])
+        .status()
+        .expect("Failed to spawn cp child process");
+    assert!(status.success(), "Failed to copy {:?} to {:?}", src, dst);
 }

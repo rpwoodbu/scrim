@@ -4,7 +4,9 @@ use std::fs::{self, File};
 use std::io::{BufReader, Read};
 use std::path::Path;
 use tempfile::tempdir;
-use test_helpers::{create_fake_appimage, find_runfile_bin, make_elf64_stub};
+use test_helpers::{
+    copy_executable, create_fake_appimage, find_runfile_bin, make_elf64_stub, write_executable,
+};
 
 #[test]
 fn test_make_elf64_stub_structure() {
@@ -79,4 +81,32 @@ fn test_find_runfile_bin_locates_current_exe_sibling() {
 #[should_panic(expected = "Could not locate 'nonexistent_scrim_test_bin' binary")]
 fn test_find_runfile_bin_panics_when_missing() {
     find_runfile_bin("nonexistent/pkg", "nonexistent_scrim_test_bin");
+}
+
+#[test]
+fn test_write_executable_in_child_creates_runnable_file() {
+    let temp = tempdir().unwrap();
+    let script_path = temp.path().join("child_written.sh");
+    write_executable(&script_path, "#!/bin/sh\necho 'child writer ok'\n");
+
+    let out = std::process::Command::new(&script_path)
+        .output()
+        .expect("Failed to execute child written script");
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "child writer ok");
+}
+
+#[test]
+fn test_copy_executable_in_child_creates_runnable_copy() {
+    let temp = tempdir().unwrap();
+    let src_path = temp.path().join("src.sh");
+    let dst_path = temp.path().join("dst.sh");
+    write_executable(&src_path, "#!/bin/sh\necho 'copied ok'\n");
+    copy_executable(&src_path, &dst_path);
+
+    let out = std::process::Command::new(&dst_path)
+        .output()
+        .expect("Failed to execute copied script");
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "copied ok");
 }

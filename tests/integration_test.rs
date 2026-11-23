@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 use tempfile::tempdir;
-use test_helpers::find_scrim_bin;
+use test_helpers::{copy_executable, find_scrim_bin, write_executable};
 
 fn compute_sha256(path: &Path) -> String {
     let output = Command::new("sha256sum")
@@ -30,20 +30,10 @@ fn test_e2e_symlink_and_fetch() {
 
     // 1. Create a mock tool source binary/script
     let mock_tool_src = temp_path.join("mock_tool_src");
-    fs::write(
+    write_executable(
         &mock_tool_src,
         "#!/bin/sh\necho \"Mock Tool Executed: args=$*\"\n",
-    )
-    .unwrap();
-    
-    // Make sure the mock source is readable (and executable just to be safe)
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&mock_tool_src).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&mock_tool_src, perms).unwrap();
-    }
+    );
 
     let sha256 = compute_sha256(&mock_tool_src);
 
@@ -142,19 +132,7 @@ fn test_e2e_local_path_resolution() {
 
     // 1. Create a local mock tool
     let local_tool = temp_path.join("my_local_tool");
-    fs::write(
-        &local_tool,
-        "#!/bin/sh\necho \"Local tool run with: $*\"\n",
-    )
-    .unwrap();
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&local_tool).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&local_tool, perms).unwrap();
-    }
+    write_executable(&local_tool, "#!/bin/sh\necho \"Local tool run with: $*\"\n",);
 
     // 2. Create scrim.yaml pointing to the local tool
     let scrim_yaml = temp_path.join("scrim.yaml");
@@ -196,19 +174,7 @@ fn test_e2e_telemetry_logging() {
 
     // 1. Create a local mock tool
     let local_tool = temp_path.join("my_local_tool");
-    fs::write(
-        &local_tool,
-        "#!/bin/sh\necho \"Telemetry test run\"\n",
-    )
-    .unwrap();
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&local_tool).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&local_tool, perms).unwrap();
-    }
+    write_executable(&local_tool, "#!/bin/sh\necho \"Telemetry test run\"\n",);
 
     // 2. Create scrim.yaml with telemetry enabled
     let scrim_yaml = temp_path.join("scrim.yaml");
@@ -259,19 +225,7 @@ fn test_e2e_telemetry_disabled_by_default() {
 
     // 1. Create a local mock tool
     let local_tool = temp_path.join("my_local_tool");
-    fs::write(
-        &local_tool,
-        "#!/bin/sh\necho \"Telemetry test run (disabled by default)\"\n",
-    )
-    .unwrap();
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&local_tool).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&local_tool, perms).unwrap();
-    }
+    write_executable(&local_tool, "#!/bin/sh\necho \"Telemetry test run (disabled by default)\"\n",);
 
     // 2. Create scrim.yaml WITHOUT specifying telemetry (should default to disabled)
     let scrim_yaml = temp_path.join("scrim.yaml");
@@ -535,15 +489,7 @@ fn test_e2e_unpack_output() {
     let archive_src_dir = temp_path.join("archive_src");
     fs::create_dir_all(&archive_src_dir).unwrap();
     let mock_tool = archive_src_dir.join("demotool");
-    fs::write(&mock_tool, "#!/bin/sh\necho \"Archived Tool\"\n").unwrap();
-    
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&mock_tool).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&mock_tool, perms).unwrap();
-    }
+    write_executable(&mock_tool, "#!/bin/sh\necho \"Archived Tool\"\n");
 
     // 2. Create the tar.gz archive
     let archive_path = temp_path.join("mock.tar.gz");
@@ -615,15 +561,7 @@ fn test_e2e_tar_xz_unpack_output() {
     let archive_src_dir = temp_path.join("archive_src");
     fs::create_dir_all(&archive_src_dir).unwrap();
     let mock_tool = archive_src_dir.join("demotool");
-    fs::write(&mock_tool, "#!/bin/sh\necho \"Archived XZ Tool\"\n").unwrap();
-    
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&mock_tool).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&mock_tool, perms).unwrap();
-    }
+    write_executable(&mock_tool, "#!/bin/sh\necho \"Archived XZ Tool\"\n");
 
     // 2. Create the tar.xz archive
     let archive_path = temp_path.join("mock.tar.xz");
@@ -968,19 +906,7 @@ fn test_e2e_links_command() {
     fs::create_dir_all(&target_bin).unwrap();
 
     let local_tool = temp_path.join("my_tool");
-    fs::write(
-        &local_tool,
-        "#!/bin/sh\necho \"Tool run: $*\"\n",
-    )
-    .unwrap();
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&local_tool).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&local_tool, perms).unwrap();
-    }
+    write_executable(&local_tool, "#!/bin/sh\necho \"Tool run: $*\"\n",);
 
     // Create scrim.yaml defining tool "tool1"
     let scrim_yaml = temp_path.join("scrim.yaml");
@@ -1154,14 +1080,7 @@ fn test_e2e_links_dry_run() {
     fs::create_dir_all(&target_bin).unwrap();
 
     let local_tool = temp_path.join("my_tool");
-    fs::write(&local_tool, "#!/bin/sh\necho \"Tool run: $*\"\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&local_tool).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&local_tool, perms).unwrap();
-    }
+    write_executable(&local_tool, "#!/bin/sh\necho \"Tool run: $*\"\n");
 
     let scrim_yaml = temp_path.join("scrim.yaml");
     let config_content = format!(
@@ -1347,19 +1266,7 @@ fn test_e2e_run_command() {
 
     // 3. Create a local mock tool script
     let mock_tool = temp_path.join("my_runner_tool");
-    fs::write(
-        &mock_tool,
-        "#!/bin/sh\necho \"Executed via run: args=$*\"\n",
-    )
-    .unwrap();
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&mock_tool).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&mock_tool, perms).unwrap();
-    }
+    write_executable(&mock_tool, "#!/bin/sh\necho \"Executed via run: args=$*\"\n",);
 
     // Create scrim.yaml defining 'mytool'
     let scrim_yaml = temp_path.join("scrim.yaml");
@@ -1504,14 +1411,7 @@ tools:
 
     // 10. Running a fetched tool via run command
     let fetch_src = temp_path.join("fetch_src");
-    fs::write(&fetch_src, "#!/bin/sh\necho \"Fetched via run: args=$*\"\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&fetch_src).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&fetch_src, perms).unwrap();
-    }
+    write_executable(&fetch_src, "#!/bin/sh\necho \"Fetched via run: args=$*\"\n");
     let fetch_sha256 = compute_sha256(&fetch_src);
 
     let config_fetch = format!(
@@ -1559,14 +1459,7 @@ fn test_e2e_url_aware_cache_invalidation_and_update_facilitation() {
 
     // 1. Create v1 tool source
     let v1_src = temp_path.join("v1_tool_src");
-    fs::write(&v1_src, "#!/bin/sh\necho \"Tool Version 1: args=$*\"\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&v1_src).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&v1_src, perms).unwrap();
-    }
+    write_executable(&v1_src, "#!/bin/sh\necho \"Tool Version 1: args=$*\"\n");
     let v1_sha256 = compute_sha256(&v1_src);
     let v1_url = format!("file://{}", v1_src.to_str().unwrap());
 
@@ -1624,14 +1517,7 @@ tools:
 
     // 5. Create v2 tool source
     let v2_src = temp_path.join("v2_tool_src");
-    fs::write(&v2_src, "#!/bin/sh\necho \"Tool Version 2: args=$*\"\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&v2_src).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&v2_src, perms).unwrap();
-    }
+    write_executable(&v2_src, "#!/bin/sh\necho \"Tool Version 2: args=$*\"\n");
     let v2_sha256 = compute_sha256(&v2_src);
     let v2_url = format!("file://{}", v2_src.to_str().unwrap());
 
@@ -1807,14 +1693,7 @@ fn test_e2e_xdg_base_directory_config_and_cache() {
 
     // 1. Create mock tool
     let tool_src = temp_path.join("tool_src");
-    fs::write(&tool_src, "#!/bin/sh\necho \"Tool Ran: args=$*\"\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&tool_src).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&tool_src, perms).unwrap();
-    }
+    write_executable(&tool_src, "#!/bin/sh\necho \"Tool Ran: args=$*\"\n");
     let sha256 = compute_sha256(&tool_src);
     let tool_url = format!("file://{}", tool_src.to_str().unwrap());
 
@@ -1870,14 +1749,7 @@ fn test_e2e_xdg_cache_home_fallback() {
 
     // 1. Create mock tool
     let tool_src = temp_path.join("tool_src");
-    fs::write(&tool_src, "#!/bin/sh\necho \"Tool Ran: args=$*\"\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&tool_src).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&tool_src, perms).unwrap();
-    }
+    write_executable(&tool_src, "#!/bin/sh\necho \"Tool Ran: args=$*\"\n");
     let sha256 = compute_sha256(&tool_src);
     let tool_url = format!("file://{}", tool_src.to_str().unwrap());
 
@@ -1934,19 +1806,10 @@ fn test_e2e_fetch_with_sha512() {
 
     // 1. Create a mock tool source binary/script
     let mock_tool_src = temp_path.join("mock_tool_src_sha512");
-    fs::write(
+    write_executable(
         &mock_tool_src,
         "#!/bin/sh\necho \"Sha512 Tool Executed: args=$*\"\n",
-    )
-    .unwrap();
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&mock_tool_src).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&mock_tool_src, perms).unwrap();
-    }
+    );
 
     let sha512 = compute_sha512(&mock_tool_src);
 
@@ -2260,37 +2123,19 @@ fn test_e2e_system_path_fallback_to_url() {
 
     // 1. Create a mock tool source binary to be fetched
     let fetched_tool_src = temp_path.join("fetched_tool_src");
-    fs::write(
+    write_executable(
         &fetched_tool_src,
         "#!/bin/sh\necho \"Fetched Tool Executed: args=$*\"\n",
-    )
-    .unwrap();
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&fetched_tool_src).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&fetched_tool_src, perms).unwrap();
-    }
+    );
 
     let sha256 = compute_sha256(&fetched_tool_src);
 
     // 2. Create an existing system tool binary
     let existing_system_tool = temp_path.join("existing_system_tool");
-    fs::write(
+    write_executable(
         &existing_system_tool,
         "#!/bin/sh\necho \"System Tool Executed: args=$*\"\n",
-    )
-    .unwrap();
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&existing_system_tool).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&existing_system_tool, perms).unwrap();
-    }
+    );
 
     let nonexistent_system_tool = temp_path.join("nonexistent_system_tool");
 
@@ -2333,7 +2178,13 @@ tools:
         .env("HOME", &fake_home)
         .output()
         .expect("Failed to run tool_exists");
-    assert!(output1.status.success());
+    assert!(
+        output1.status.success(),
+        "output1 failed: status={:?}, stderr={}, stdout={}",
+        output1.status,
+        String::from_utf8_lossy(&output1.stderr),
+        String::from_utf8_lossy(&output1.stdout)
+    );
     let stdout1 = String::from_utf8(output1.stdout).unwrap();
     assert!(stdout1.contains("System Tool Executed: args=hello"));
 
@@ -2344,7 +2195,13 @@ tools:
         .env("HOME", &fake_home)
         .output()
         .expect("Failed to run tool_fallback");
-    assert!(output2.status.success());
+    assert!(
+        output2.status.success(),
+        "output2 failed: status={:?}, stderr={}, stdout={}",
+        output2.status,
+        String::from_utf8_lossy(&output2.stderr),
+        String::from_utf8_lossy(&output2.stdout)
+    );
     let stdout2 = String::from_utf8(output2.stdout).unwrap();
     assert!(stdout2.contains("Fetched Tool Executed: args=world"));
 }
@@ -2835,18 +2692,10 @@ fn test_proxy_path_fallback_success() {
 
     // Real tool in sys_dir
     let sys_tool = sys_dir.join("fallback_tool");
-    fs::write(
+    write_executable(
         &sys_tool,
         "#!/bin/sh\necho \"Fallback Executed: args=$*\"\n",
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&sys_tool).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&sys_tool, perms).unwrap();
-    }
+    );
 
     // Symlink in shim_dir pointing to scrim
     let shim_path = shim_dir.join("fallback_tool");
@@ -2892,40 +2741,27 @@ fn test_proxy_path_fallback_hardlink() {
     let temp = tempdir().unwrap();
     let temp_path = temp.path();
 
-    // Copy scrim_bin into temp_path first so we can create a hardlink on the same filesystem
-    let scrim_copy = temp_path.join("scrim_copy");
-    fs::copy(&scrim_bin, &scrim_copy).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&scrim_copy).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&scrim_copy, perms).unwrap();
-    }
-
     let shim_dir = temp_path.join("shims");
     let sys_dir = temp_path.join("sys");
     fs::create_dir_all(&shim_dir).unwrap();
     fs::create_dir_all(&sys_dir).unwrap();
 
     let sys_tool = sys_dir.join("hardlink_tool");
-    fs::write(
+    write_executable(
         &sys_tool,
         "#!/bin/sh\necho \"Hardlink Fallback: args=$*\"\n",
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&sys_tool).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&sys_tool, perms).unwrap();
-    }
+    );
 
-    // Hardlink in shim_dir pointing to scrim_copy
+    // Hardlink in shim_dir pointing to scrim_bin. If cross-device linking (EXDEV)
+    // fails (e.g. temp directory is on a different mount than scrim_bin), copy
+    // scrim_bin into temp_path first in a child process before creating the hardlink.
     let shim_path = shim_dir.join("hardlink_tool");
     #[cfg(unix)]
-    fs::hard_link(&scrim_copy, &shim_path).unwrap();
+    if fs::hard_link(&scrim_bin, &shim_path).is_err() {
+        let scrim_copy = temp_path.join("scrim_copy");
+        copy_executable(&scrim_bin, &scrim_copy);
+        fs::hard_link(&scrim_copy, &shim_path).unwrap();
+    }
 
     let path_env = format!("{}:{}", shim_dir.display(), sys_dir.display());
     let out = Command::new(&shim_path)
@@ -2994,18 +2830,10 @@ fn test_proxy_path_fallback_permission_denied_exit_126() {
 
     // Script with shebang pointing to the unexecutable interpreter
     let sys_tool = sys_dir.join("perm_denied_tool");
-    fs::write(
+    write_executable(
         &sys_tool,
         format!("#!{}\necho hi\n", noexec_interpreter.display()),
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&sys_tool).unwrap().permissions();
-        perms.set_mode(0o755); // sys_tool itself is executable, but executing it fails with EACCES
-        fs::set_permissions(&sys_tool, perms).unwrap();
-    }
+    );
 
     let shim_path = shim_dir.join("perm_denied_tool");
     #[cfg(unix)]
@@ -3035,18 +2863,10 @@ fn test_proxy_path_fallback_telemetry() {
     fs::create_dir_all(&sys_dir).unwrap();
 
     let sys_tool = sys_dir.join("telemetry_tool");
-    fs::write(
+    write_executable(
         &sys_tool,
         "#!/bin/sh\necho \"Telemetry test\"\n",
-    )
-    .unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&sys_tool).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&sys_tool, perms).unwrap();
-    }
+    );
 
     let shim_path = shim_dir.join("telemetry_tool");
     #[cfg(unix)]
@@ -3102,14 +2922,7 @@ fn test_scrim_run_and_which_do_not_fallback_to_path() {
     fs::create_dir_all(&sys_dir).unwrap();
 
     let sys_tool = sys_dir.join("only_in_path");
-    fs::write(&sys_tool, "#!/bin/sh\necho sys tool\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&sys_tool).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&sys_tool, perms).unwrap();
-    }
+    write_executable(&sys_tool, "#!/bin/sh\necho sys tool\n");
 
     // scrim run only_in_path must fail with status 1
     let out_run = Command::new(&scrim_bin)
@@ -3148,14 +2961,7 @@ fn test_syntactic_parse_error_tolerance_in_proxy_invocation() {
     let sys_dir = temp_path.join("sys");
     fs::create_dir_all(&sys_dir).unwrap();
     let sys_node = sys_dir.join("node");
-    fs::write(&sys_node, "#!/bin/sh\necho external node\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&sys_node).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&sys_node, perms).unwrap();
-    }
+    write_executable(&sys_node, "#!/bin/sh\necho external node\n");
 
     // 3. Create proxy shim node -> scrim
     let shim_path = temp_path.join("node");
@@ -3186,27 +2992,13 @@ fn test_semantic_error_isolation_proxy_invocation() {
 
     // 1. Script for good_tool
     let good_script = temp_path.join("good.sh");
-    fs::write(&good_script, "#!/bin/sh\necho good tool executed\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&good_script).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&good_script, perms).unwrap();
-    }
+    write_executable(&good_script, "#!/bin/sh\necho good tool executed\n");
 
     // 2. Mock external binary for bad_tool on PATH to verify no accidental fallback
     let sys_dir = temp_path.join("sys");
     fs::create_dir_all(&sys_dir).unwrap();
     let sys_bad = sys_dir.join("bad_tool");
-    fs::write(&sys_bad, "#!/bin/sh\necho bad external\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&sys_bad).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&sys_bad, perms).unwrap();
-    }
+    write_executable(&sys_bad, "#!/bin/sh\necho bad external\n");
 
     // 3. scrim.yaml with good_tool (valid) and bad_tool (semantic error: url without digest)
     let scrim_yaml = temp_path.join("scrim.yaml");
@@ -3267,14 +3059,7 @@ fn test_scrim_run_allow_fallback_to_lower_layer() {
 
     // 1. Lower layer (parent) defines node validly
     let parent_script = temp_path.join("parent_node.sh");
-    fs::write(&parent_script, "#!/bin/sh\necho parent node\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&parent_script).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&parent_script, perms).unwrap();
-    }
+    write_executable(&parent_script, "#!/bin/sh\necho parent node\n");
     let parent_config = temp_path.join("scrim.yaml");
     fs::write(
         &parent_config,
@@ -3340,14 +3125,7 @@ fn test_scrim_run_allow_fallback_to_path() {
     let sys_dir = temp_path.join("sys");
     fs::create_dir_all(&sys_dir).unwrap();
     let sys_node = sys_dir.join("node");
-    fs::write(&sys_node, "#!/bin/sh\necho path node\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&sys_node).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&sys_node, perms).unwrap();
-    }
+    write_executable(&sys_node, "#!/bin/sh\necho path node\n");
 
     // 2. Workspace config defines node with semantic error
     let scrim_yaml = temp_path.join("scrim.yaml");
@@ -3457,14 +3235,7 @@ fn test_scrim_which_allow_fallback_to_path() {
     let sys_dir = temp_path.join("sys");
     fs::create_dir_all(&sys_dir).unwrap();
     let sys_node = sys_dir.join("node");
-    fs::write(&sys_node, "#!/bin/sh\necho path node\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&sys_node).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&sys_node, perms).unwrap();
-    }
+    write_executable(&sys_node, "#!/bin/sh\necho path node\n");
 
     // 2. Workspace config defines node with semantic error
     let scrim_yaml = temp_path.join("scrim.yaml");
@@ -3697,14 +3468,7 @@ fn test_e2e_telemetry_file_default_xdg_and_custom_path() {
     let temp_path = temp.path();
 
     let local_tool = temp_path.join("fast_tool");
-    fs::write(&local_tool, "#!/bin/sh\necho \"fast output\"\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&local_tool).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&local_tool, perms).unwrap();
-    }
+    write_executable(&local_tool, "#!/bin/sh\necho \"fast output\"\n");
 
     let state_home = temp_path.join("state_root");
     let config_home = temp_path.join("xdg_config");
@@ -3788,14 +3552,7 @@ fn test_e2e_telemetry_additive_layering_and_deduplication() {
     let temp_path = temp.path();
 
     let local_tool = temp_path.join("my_tool");
-    fs::write(&local_tool, "#!/bin/sh\necho \"layered ok\"\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&local_tool).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&local_tool, perms).unwrap();
-    }
+    write_executable(&local_tool, "#!/bin/sh\necho \"layered ok\"\n");
 
     let state_home = temp_path.join("state");
     let config_home = temp_path.join("xdg_config");
@@ -3875,14 +3632,7 @@ fn test_e2e_telemetry_relative_path_fault_tolerance() {
     fs::create_dir_all(temp_path.join(".git")).unwrap();
 
     let local_tool = temp_path.join("real_tool");
-    fs::write(&local_tool, "#!/bin/sh\necho \"fault tolerant ok\"\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&local_tool).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&local_tool, perms).unwrap();
-    }
+    write_executable(&local_tool, "#!/bin/sh\necho \"fault tolerant ok\"\n");
 
     let valid_log = temp_path.join("valid/telemetry.log");
     let config_home = temp_path.join("xdg_config");
@@ -3929,14 +3679,7 @@ fn test_e2e_telemetry_child_detaches_stdio_no_pipe_hang() {
     fs::create_dir_all(temp_path.join(".git")).unwrap();
 
     let local_tool = temp_path.join("real_tool");
-    fs::write(&local_tool, "#!/bin/sh\necho \"fifo test ok\"\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&local_tool).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&local_tool, perms).unwrap();
-    }
+    write_executable(&local_tool, "#!/bin/sh\necho \"fifo test ok\"\n");
 
     let fifo_path = temp_path.join("telemetry.fifo");
     let mkfifo_status = Command::new("mkfifo").arg(&fifo_path).status().unwrap();
@@ -4012,14 +3755,7 @@ fn test_e2e_telemetry_scrim_run_and_xdg_state_fallback() {
     fs::create_dir_all(temp_path.join(".git")).unwrap();
 
     let local_tool = temp_path.join("real_tool");
-    fs::write(&local_tool, "#!/bin/sh\necho \"run args=$*\"\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&local_tool).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&local_tool, perms).unwrap();
-    }
+    write_executable(&local_tool, "#!/bin/sh\necho \"run args=$*\"\n");
 
     let home_dir = temp_path.join("home");
     let config_home = temp_path.join("xdg_config");
@@ -4074,14 +3810,7 @@ fn test_e2e_telemetry_invalid_yaml_discarded_retains_lower_layer() {
     let temp_path = temp.path();
 
     let local_tool = temp_path.join("real_tool");
-    fs::write(&local_tool, "#!/bin/sh\necho \"lower layer ok\"\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&local_tool).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&local_tool, perms).unwrap();
-    }
+    write_executable(&local_tool, "#!/bin/sh\necho \"lower layer ok\"\n");
 
     let repo_root = temp_path.join("repo");
     let child_dir = repo_root.join("sub");
@@ -4189,14 +3918,7 @@ fn test_e2e_telemetry_write_failure_isolation() {
     fs::create_dir_all(temp_path.join(".git")).unwrap();
 
     let local_tool = temp_path.join("real_tool");
-    fs::write(&local_tool, "#!/bin/sh\necho \"write isolation ok\"\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&local_tool).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&local_tool, perms).unwrap();
-    }
+    write_executable(&local_tool, "#!/bin/sh\necho \"write isolation ok\"\n");
 
     // Create a regular file to make unwritable_sink's parent path impossible to create
     let blocker = temp_path.join("blocker");
@@ -4245,14 +3967,7 @@ fn test_e2e_config_caching_proxy_background_persistence() {
     fs::create_dir_all(temp_path.join(".git")).unwrap();
 
     let local_tool = temp_path.join("real_tool");
-    fs::write(&local_tool, "#!/bin/sh\necho \"cached proxy run ok\"\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&local_tool).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&local_tool, perms).unwrap();
-    }
+    write_executable(&local_tool, "#!/bin/sh\necho \"cached proxy run ok\"\n");
 
     let config_home = temp_path.join("xdg_config");
     let cache_home = temp_path.join("xdg_cache");
