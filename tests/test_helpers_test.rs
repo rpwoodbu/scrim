@@ -5,7 +5,9 @@ use std::io::{BufReader, Read};
 use std::path::Path;
 use tempfile::tempdir;
 use test_helpers::{
-    copy_executable, create_fake_appimage, find_runfile_bin, make_elf64_stub, write_executable,
+    copy_executable, create_fake_appimage, find_runfile_bin, make_elf64_stub,
+    start_mock_https_server, write_executable, TEST_CA_CERT_PEM, TEST_SERVER_CERT_DER,
+    TEST_SERVER_KEY_DER,
 };
 
 #[test]
@@ -109,4 +111,42 @@ fn test_copy_executable_in_child_creates_runnable_copy() {
         .expect("Failed to execute copied script");
     assert!(out.status.success());
     assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "copied ok");
+}
+
+#[test]
+fn test_mock_https_server_cert_constants() {
+    assert!(TEST_CA_CERT_PEM.contains("-----BEGIN CERTIFICATE-----"));
+    assert!(TEST_CA_CERT_PEM.contains("-----END CERTIFICATE-----"));
+    assert!(!TEST_SERVER_CERT_DER.is_empty());
+    assert_eq!(TEST_SERVER_CERT_DER[0], 0x30); // ASN.1 Sequence tag
+    assert!(!TEST_SERVER_KEY_DER.is_empty());
+    assert_eq!(TEST_SERVER_KEY_DER[0], 0x30); // ASN.1 Sequence tag
+}
+
+#[test]
+fn test_start_mock_https_server_serves_tls_payload() {
+    let payload = b"hello mock https test";
+    let (port, server_handle) = start_mock_https_server(payload.to_vec(), 1);
+
+    let cert_der = ureq::tls::Certificate::from_pem(TEST_CA_CERT_PEM.as_bytes())
+        .expect("Failed to parse TEST_CA_CERT_PEM");
+
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .tls_config(
+            ureq::tls::TlsConfig::builder()
+                .root_certs(ureq::tls::RootCerts::Specific(std::sync::Arc::new(vec![cert_der])))
+                .build(),
+        )
+        .build()
+        .into();
+
+    let url = format!("https://127.0.0.1:{}/test", port);
+    let resp = agent.get(&url).call().expect("Failed to call mock HTTPS server");
+    assert_eq!(resp.status(), 200);
+
+    let mut body = Vec::new();
+    resp.into_body().into_reader().read_to_end(&mut body).unwrap();
+    assert_eq!(body, payload);
+
+    server_handle.join().expect("Server thread panicked");
 }

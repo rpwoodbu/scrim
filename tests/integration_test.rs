@@ -2,7 +2,9 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 use tempfile::tempdir;
-use test_helpers::{copy_executable, find_scrim_bin, write_executable};
+use test_helpers::{
+    copy_executable, find_scrim_bin, start_mock_https_server, write_executable, TEST_CA_CERT_PEM,
+};
 
 fn compute_sha256(path: &Path) -> String {
     let output = Command::new("sha256sum")
@@ -4029,4 +4031,96 @@ fn test_e2e_config_caching_proxy_background_persistence() {
 
     assert!(out2.status.success());
     assert_eq!(String::from_utf8_lossy(&out2.stdout), "cached proxy run ok\n");
+}
+
+#[test]
+fn test_fetch_tool_https_custom_ca_ssl_cert_file() {
+    let scrim_bin = find_scrim_bin();
+
+    let temp = tempdir().unwrap();
+    let temp_path = temp.path();
+    let mock_bytes = b"#!/bin/sh\necho \"Demotool HTTPS: $@\"\n";
+
+    let temp_src = temp_path.join("demotool_bin");
+    fs::write(&temp_src, mock_bytes).unwrap();
+    let sha256 = compute_sha256(&temp_src);
+
+    // 1. Start mock HTTPS server presenting certificate signed by TEST_CA_CERT_PEM
+    let (port, server_handle) = start_mock_https_server(mock_bytes.to_vec(), 2);
+    let mock_server_url = format!("https://127.0.0.1:{}/demotool", port);
+
+    // 2. Write custom CA certificate PEM to disk
+    let ca_cert_file = temp_path.join("custom_ca.crt");
+    fs::write(&ca_cert_file, TEST_CA_CERT_PEM).unwrap();
+
+    // 3. Configure scrim.yaml with the HTTPS download URL
+    let scrim_yaml = temp_path.join("scrim.yaml");
+    let config_content = format!(
+        r#"
+telemetry: false
+default_platform: linux-x86_64
+
+tools:
+  demotool:
+    url: "{}"
+    sha256: "{}"
+"#,
+        mock_server_url, sha256
+    );
+    fs::write(&scrim_yaml, config_content).unwrap();
+
+    let shim_path = temp_path.join("demotool");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&scrim_bin, &shim_path).unwrap();
+
+    let cache_home = temp_path.join("fake_home");
+    fs::create_dir_all(&cache_home).unwrap();
+
+    // 4. Attempt fetch WITHOUT custom CA trusted in SSL_CERT_FILE:
+    // Proves the failure mode: untrusted custom CA/proxy cert fails with UnknownIssuer
+    let output_fail = Command::new(&shim_path)
+        .arg("hello")
+        .current_dir(temp_path)
+        .env("HOME", &cache_home)
+        .env_remove("SSL_CERT_FILE")
+        .output()
+        .expect("Failed to execute demotool shim");
+
+    assert!(
+        !output_fail.status.success(),
+        "Expected HTTPS download to fail when custom CA is not trusted"
+    );
+    let stderr_fail = String::from_utf8(output_fail.stderr).unwrap();
+    assert!(
+        stderr_fail.contains("UnknownIssuer"),
+        "Expected error output to contain UnknownIssuer, got: {}",
+        stderr_fail
+    );
+
+    // 5. Attempt fetch WITH SSL_CERT_FILE pointing to the custom CA certificate:
+    // Proves the fix: custom CA specified via SSL_CERT_FILE is trusted, download succeeds,
+    // and tool executes cleanly.
+    let output_success = Command::new(&shim_path)
+        .arg("verified_proxy")
+        .current_dir(temp_path)
+        .env("HOME", &cache_home)
+        .env("SSL_CERT_FILE", &ca_cert_file)
+        .output()
+        .expect("Failed to execute demotool shim with SSL_CERT_FILE");
+
+    let stdout_success = String::from_utf8(output_success.stdout).unwrap();
+    let stderr_success = String::from_utf8(output_success.stderr).unwrap();
+
+    assert!(
+        output_success.status.success(),
+        "Expected fetch to succeed with SSL_CERT_FILE set. Stderr: {}",
+        stderr_success
+    );
+    assert!(
+        stdout_success.contains("Demotool HTTPS: verified_proxy"),
+        "Stdout did not contain expected output: {:?}",
+        stdout_success
+    );
+
+    let _ = server_handle.join();
 }

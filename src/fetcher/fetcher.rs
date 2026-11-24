@@ -3,6 +3,8 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 use archive::{ArchiveFormat, extract_and_prepare_archive, resolve_relative_bin_path};
 use hashing::HashingWriter;
+use ureq::Agent;
+use ureq::tls::{RootCerts, TlsConfig};
 
 fn cached_urls_contain(url_file: &Path, url: &str) -> bool {
     if let Ok(content) = fs::read_to_string(url_file) {
@@ -91,7 +93,15 @@ pub fn fetch_tool(
         io::copy(&mut file, &mut hw)?;
     } else {
         logger::scrim_progress!("Downloading {}...", tool_name);
-        let response = match ureq::get(url).call() {
+        let agent: Agent = Agent::config_builder()
+            .tls_config(
+                TlsConfig::builder()
+                    .root_certs(RootCerts::PlatformVerifier)
+                    .build(),
+            )
+            .build()
+            .into();
+        let response = match agent.get(url).call() {
             Ok(resp) => {
                 if !resp.status().is_success() {
                     return Err(format!("Failed to download tool: HTTP status {}", resp.status()).into());

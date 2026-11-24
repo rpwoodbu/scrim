@@ -39,6 +39,8 @@ rust_library(
     ],
     deps = [
         "@crates//:backhand",
+        "@crates//:rustls",
+        "@crates//:rustls-pki-types",
     ],
 )
 
@@ -50,6 +52,7 @@ rust_test(
         ":test_helpers",
         "@crates//:backhand",
         "@crates//:tempfile",
+        "@crates//:ureq",
     ],
 )
 
