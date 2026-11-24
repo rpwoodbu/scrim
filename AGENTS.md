@@ -12,6 +12,7 @@ Keep the history clean. Follow these rules to achieve this:
 * Commits MUST be complete, including any test or documentation changes relevant to the change. You MUST NOT commit code without ensuring its behavior is tested.
 * Yet commits should be small and targeted. Separate concerns deserve separate commits.
 * All tests MUST pass on each commit.
+* Test helpers, utilities, and fixtures MUST have dedicated tests verifying their behavior (e.g., in `test_helpers_test.rs`).
 * Commit messages MUST be descriptive and clearly explain the 'why' and 'how' of the change.
 * When modifying dependencies (e.g., `MODULE.bazel`), you MUST run a build/test and include any resulting lockfile updates (e.g., `MODULE.bazel.lock`) in the same commit.
 * It is appropriate to amend unpushed commits to incorporate fixes that should have been included originally.
